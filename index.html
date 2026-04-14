@@ -1143,16 +1143,103 @@ function getDayData(dayIdx) {
     places = [fixed_start, ...middle, fixed_end];
   }
 
-  return { ...plan, places };
+  // ── segs 재계산 후 반환 ──
+  const segs = computeSegs(places);
+  return { ...plan, places, segs };
+}
+
+// ────────────────────────────────────────────────────────────────
+// computeSegs: 장소 배열을 받아 구간별 이동수단·시간·비용을 재계산
+// 규칙 기반 (실서비스에서는 Directions API 호출로 대체)
+// ────────────────────────────────────────────────────────────────
+function computeSegs(places) {
+  if (!places || places.length < 2) return [];
+
+  // 두 좌표 간 직선거리 (km)
+  function dist(a, b) {
+    const R = 6371;
+    const dLat = (b.lat - a.lat) * Math.PI / 180;
+    const dLng = (b.lng - a.lng) * Math.PI / 180;
+    const x = Math.sin(dLat/2)**2 +
+              Math.cos(a.lat*Math.PI/180) * Math.cos(b.lat*Math.PI/180) *
+              Math.sin(dLng/2)**2;
+    return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1-x));
+  }
+
+  // 카테고리로 이동수단 결정 기준
+  const AIRPORT_CATS = ['공항'];
+  const FIXED_TRANSIT = new Set(['이동']); // 신칸센 등
+
+  return places.slice(0, -1).map((from, i) => {
+    const to = places[i + 1];
+    const km = dist(from, to);
+
+    const fromIsAirport = AIRPORT_CATS.includes(from.cat);
+    const toIsAirport   = AIRPORT_CATS.includes(to.cat);
+    const fromIsTransit = FIXED_TRANSIT.has(from.cat);
+    const toIsTransit   = FIXED_TRANSIT.has(to.cat);
+
+    let mode, mins, cost;
+
+    if (fromIsAirport || toIsAirport) {
+      // 공항 ↔ 시내: 리무진·전철
+      mode = 'transit';
+      mins = Math.round(30 + km * 1.1);
+      // 일본 공항 접근 요금 기준
+      cost = km > 50 ? 2200 : km > 30 ? 1400 : 640;
+    } else if (fromIsTransit || toIsTransit || km > 20) {
+      // 장거리 이동 (닛코, 요코하마 등 당일치기)
+      mode = 'transit';
+      mins = Math.round(km * 2.8 + 15);
+      cost = Math.round(km * 22);
+    } else if (km <= 1.0) {
+      // 1km 이하: 도보
+      mode = 'walk';
+      mins = Math.round(km * 14 + 3);
+      cost = 0;
+    } else if (km <= 3.5) {
+      // 1~3.5km: 도보 or 전철 (가까우면 도보 우선)
+      const walkMins = Math.round(km * 13);
+      if (walkMins <= 22) {
+        mode = 'walk';
+        mins = walkMins;
+        cost = 0;
+      } else {
+        mode = 'transit';
+        mins = Math.round(km * 4 + 8);
+        cost = km < 2.5 ? 170 : 210;
+      }
+    } else {
+      // 3.5km 초과: 전철
+      mode = 'transit';
+      mins = Math.round(km * 3.5 + 10);
+      cost = km < 8 ? 210 : km < 15 ? 280 : 320;
+    }
+
+    return { mode, mins, cost };
+  });
+}
+
+// computeSegs 결과로 총 이동시간·비용 집계
+function calcSummary(segs) {
+  const totalMins = segs.reduce((s, g) => s + g.mins, 0);
+  const totalCost = segs.reduce((s, g) => s + g.cost, 0);
+  return { totalMins, totalCost };
 }
 
 function renderDayPlan() {
   const data = getDayData(activeDay);
-  const plans = getActivePlans();
-  const plan = plans[activeDay] || plans[activeDay % plans.length];
 
-  document.getElementById('totalTime').textContent = data.time;
-  document.getElementById('totalCost').textContent = data.cost;
+  const { totalMins, totalCost } = calcSummary(data.segs);
+  const city = selectedCity || '도쿄';
+  // 통화 기호 결정
+  const currencyMap = { '도쿄':'¥','오사카':'¥','삿포로':'¥','후쿠오카':'¥','나고야':'¥','오키나와':'¥','교토':'¥',
+    '파리':'€','니스':'€','런던':'£','에든버러':'£','방콕':'฿','치앙마이':'฿','푸켓':'฿',
+    '다낭':'₫','호치민':'₫','하노이':'₫','시드니':'A$','멜버른':'A$','브리즈번':'A$','골드코스트':'A$','케언즈':'A$' };
+  const sym = currencyMap[city] || '¥';
+
+  document.getElementById('totalTime').textContent = totalMins + '분';
+  document.getElementById('totalCost').textContent = sym + totalCost.toLocaleString();
   document.getElementById('stopCount').textContent = data.places.length + '곳';
 
   renderRoute(data);
@@ -1217,11 +1304,13 @@ function renderRoute(data) {
     list.appendChild(item);
 
     if (i < data.places.length - 1) {
-      const seg = data.segs ? (data.segs[Math.min(i, data.segs.length-1)]) : { mode:'walk', mins:10, cost:0 };
+      const seg = (data.segs && data.segs[i]) ? data.segs[i] : { mode:'walk', mins:10, cost:0 };
+      const modeLabel = seg.mode === 'transit' ? '전철' : '도보';
+      const segCostStr = seg.cost > 0 ? ' · ' + getSegCostStr(data.places[i], data.places[i+1], seg.cost) : '';
       const segRow = document.createElement('div');
       segRow.className = 'segment-row';
-      segRow.innerHTML = `<span class="seg-badge ${seg.mode}">${seg.mode === 'transit' ? '전철' : '도보'}</span>
-        <span class="seg-text">${seg.mins}분 ${seg.cost > 0 ? '· ¥'+seg.cost : ''}</span>`;
+      segRow.innerHTML = `<span class="seg-badge ${seg.mode}">${modeLabel}</span>
+        <span class="seg-text">${seg.mins}분${segCostStr}</span>`;
       list.appendChild(segRow);
     }
   });
@@ -1300,9 +1389,27 @@ function doSearch() {
   el.classList.add('open');
 }
 
+// 통화 기호 헬퍼
+function getCurrencySymbol() {
+  const currencyMap = { '도쿄':'¥','오사카':'¥','삿포로':'¥','후쿠오카':'¥','나고야':'¥','오키나와':'¥','교토':'¥',
+    '파리':'€','니스':'€','런던':'£','에든버러':'£','방콕':'฿','치앙마이':'฿','푸켓':'฿',
+    '다낭':'₫','호치민':'₫','하노이':'₫','시드니':'A$','멜버른':'A$','브리즈번':'A$','골드코스트':'A$','케언즈':'A$' };
+  return currencyMap[selectedCity] || '¥';
+}
+
+// 구간 비용 표시 문자열
+function getSegCostStr(from, to, cost) {
+  return getCurrencySymbol() + cost.toLocaleString();
+}
+
 function addPlace(name, cat, type, lat, lng) {
   const emoji = (TYPE_META[type] || {}).emoji || '📍';
   const newPlace = { name, cat, emoji, lat, lng };
+
+  // 추가 전 요약
+  const beforeData = getDayData(activeDay);
+  const { totalMins: beforeMins, totalCost: beforeCost } = calcSummary(beforeData.segs);
+
   if (!customPlaces[activeDay]) customPlaces[activeDay] = [];
   customPlaces[activeDay].push(newPlace);
 
@@ -1312,7 +1419,24 @@ function addPlace(name, cat, type, lat, lng) {
   document.getElementById('dot3').classList.add('active');
 
   renderDayPlan();
-  document.getElementById('diffCard').classList.add('show');
+
+  // 추가 후 요약
+  const afterData = getDayData(activeDay);
+  const { totalMins: afterMins, totalCost: afterCost } = calcSummary(afterData.segs);
+
+  // diff 카드 동적 업데이트
+  const sym = getCurrencySymbol();
+  const diffCard = document.getElementById('diffCard');
+  diffCard.querySelector('.diff-row').innerHTML = `
+    <div class="diff-item">
+      <div class="diff-label">총 이동시간</div>
+      <div class="diff-vals"><span>${beforeMins}분</span><span class="diff-arrow">→</span><span class="diff-after">${afterMins}분</span></div>
+    </div>
+    <div class="diff-item">
+      <div class="diff-label">교통비</div>
+      <div class="diff-vals"><span>${sym}${beforeCost.toLocaleString()}</span><span class="diff-arrow">→</span><span class="diff-after">${sym}${afterCost.toLocaleString()}</span></div>
+    </div>`;
+  diffCard.classList.add('show');
 }
 
 function closeDiff() {
