@@ -595,7 +595,7 @@ function getActivePlaces() {
 }
 
 // 하위 호환성을 위한 ALL_PLACES (현재 도시 기반)
-let ALL_PLACES = getActivePlaces();
+let ALL_PLACES = [];
 
 // 타입별 색상/이모지
 const TYPE_META = {
@@ -1904,6 +1904,7 @@ let excludedPlaces = {};
 let selectedHotel = null;
 let selectedAirport = DESTINATIONS['🇯🇵 일본'].cities['도쿄'].airports[0]; // 도착 공항
 let orderOverrides = {};
+ALL_PLACES = getActivePlaces();
 
 // ── Leaflet 지도 초기화 ──
 let map = null;
@@ -3043,14 +3044,17 @@ function doSearch() {
   el.innerHTML = '';
 
   // 퍼지 검색: 이름/카테고리/지역 모두 매칭
+  const placesDb = getActivePlaces();
+  ALL_PLACES = placesDb;
+
   let results = q
-    ? ALL_PLACES.filter(r =>
+    ? placesDb.filter(r =>
         r.name.toLowerCase().includes(q) ||
         r.cat.toLowerCase().includes(q) ||
         r.area.toLowerCase().includes(q) ||
         r.type.toLowerCase().includes(q)
       )
-    : ALL_PLACES.slice(0, 8);
+    : placesDb.slice(0, 8);
 
   if (results.length === 0) {
     el.innerHTML = '<div style="padding:8px 0;font-size:12px;color:var(--text2);">검색 결과가 없어요</div>';
