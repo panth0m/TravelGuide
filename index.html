@@ -139,6 +139,7 @@ body { font-family: 'Noto Sans KR', sans-serif; color: var(--text1); background:
 /* ===== TRANSITIONS ===== */
 @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 .route-item, .result-item { animation: fadeIn 0.2s ease; }
+.route-item.drag-over { border-top: 2px solid var(--accent); background: var(--accent-light); }
 
 /* ===== MOBILE ===== */
 @media (max-width: 640px) {
@@ -213,6 +214,12 @@ body { font-family: 'Noto Sans KR', sans-serif; color: var(--text1); background:
   <div class="screen active conditions-screen" id="screen1">
     <div class="conditions-inner">
       <div class="section-gap">
+        <div class="section-title">여행지</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;" id="countryChips"></div>
+        <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;" id="cityChips"></div>
+      </div>
+
+      <div class="section-gap">
         <div class="section-title">여행 기간</div>
         <div class="days-row">
           <button class="days-btn" onclick="changeDays(-1)">−</button>
@@ -273,12 +280,8 @@ body { font-family: 'Noto Sans KR', sans-serif; color: var(--text1); background:
       </div>
 
       <div class="section-gap">
-        <div class="section-title">도착/출발 공항 (선택)</div>
-        <div class="chip-group">
-          <button class="chip selected" id="airportChip1" onclick="selectAirport(this,'나리타 공항',35.7647,140.3864)">나리타</button>
-          <button class="chip" id="airportChip2" onclick="selectAirport(this,'하네다 공항',35.5494,139.7798)">하네다</button>
-          <button class="chip" id="airportChip0" onclick="selectAirport(this,null,null,null)">미정</button>
-        </div>
+        <div class="section-title">공항 (선택)</div>
+        <div class="chip-group" id="airportChips"></div>
       </div>
 
       <div class="section-gap">
@@ -536,13 +539,100 @@ const TYPE_META = {
   sightseeing:{ dot:'#1D9E75', emoji:'🏛' },
 };
 
+// ── 국가/도시/공항 DB ──
+const DESTINATIONS = {
+  '🇯🇵 일본': {
+    cities: {
+      '도쿄': {
+        airports: [
+          { name:'나리타 국제공항', short:'나리타', lat:35.7647, lng:140.3864 },
+          { name:'하네다 국제공항', short:'하네다', lat:35.5494, lng:139.7798 },
+        ]
+      },
+      '오사카': {
+        airports: [
+          { name:'간사이 국제공항', short:'간사이', lat:34.4320, lng:135.2304 },
+          { name:'이타미 공항', short:'이타미', lat:34.7855, lng:135.4381 },
+        ]
+      },
+      '삿포로': {
+        airports: [
+          { name:'신치토세 공항', short:'신치토세', lat:42.7752, lng:141.6923 },
+        ]
+      },
+      '후쿠오카': {
+        airports: [
+          { name:'후쿠오카 공항', short:'후쿠오카', lat:33.5859, lng:130.4511 },
+        ]
+      },
+      '나고야': {
+        airports: [
+          { name:'주부 국제공항', short:'주부', lat:34.8584, lng:136.8050 },
+        ]
+      },
+      '오키나와': {
+        airports: [
+          { name:'나하 공항', short:'나하', lat:26.1958, lng:127.6461 },
+        ]
+      },
+    }
+  },
+  '🇫🇷 프랑스': {
+    cities: {
+      '파리': {
+        airports: [
+          { name:'샤를 드 골 공항', short:'CDG', lat:49.0097, lng:2.5479 },
+          { name:'오를리 공항', short:'ORY', lat:48.7233, lng:2.3794 },
+        ]
+      },
+    }
+  },
+  '🇬🇧 영국': {
+    cities: {
+      '런던': {
+        airports: [
+          { name:'히드로 공항', short:'LHR', lat:51.4700, lng:-0.4543 },
+          { name:'개트윅 공항', short:'LGW', lat:51.1537, lng:-0.1821 },
+        ]
+      },
+    }
+  },
+  '🇹🇭 태국': {
+    cities: {
+      '방콕': {
+        airports: [
+          { name:'수완나품 공항', short:'BKK', lat:13.6811, lng:100.7474 },
+          { name:'돈므앙 공항', short:'DMK', lat:13.9126, lng:100.6067 },
+        ]
+      },
+    }
+  },
+  '🇻🇳 베트남': {
+    cities: {
+      '다낭': {
+        airports: [
+          { name:'다낭 국제공항', short:'DAD', lat:16.0439, lng:108.1993 },
+        ]
+      },
+      '호치민': {
+        airports: [
+          { name:'떤선녓 국제공항', short:'SGN', lat:10.8188, lng:106.6520 },
+        ]
+      },
+    }
+  },
+};
+
+let selectedCountry = '🇯🇵 일본';
+let selectedCity = '도쿄';
 let days = 1;
 let activeDay = 0;
 let activeIdx = null;
 let customPlaces = {};
 let excludedPlaces = {};
 let selectedHotel = null;
-let selectedAirport = { name:'나리타 공항', lat:35.7647, lng:140.3864 }; // 기본값 나리타
+let selectedAirport = DESTINATIONS['🇯🇵 일본'].cities['도쿄'].airports[0];
+let orderOverrides = {}; // { dayIdx: [place, place, ...] } 순서 커스텀
 
 // ── Leaflet 지도 초기화 ──
 let map = null;
@@ -700,10 +790,58 @@ function goBack() {
   if (map) { map.remove(); map = null; markersLayer = []; routeLine = null; }
 }
 
+function renderDestinationUI() {
+  // 국가 칩
+  const countryEl = document.getElementById('countryChips');
+  countryEl.innerHTML = '';
+  Object.keys(DESTINATIONS).forEach(country => {
+    const btn = document.createElement('button');
+    btn.className = 'chip' + (country === selectedCountry ? ' selected' : '');
+    btn.textContent = country;
+    btn.onclick = () => { selectedCountry = country; selectedCity = Object.keys(DESTINATIONS[country].cities)[0]; selectedAirport = DESTINATIONS[country].cities[selectedCity].airports[0]; renderDestinationUI(); };
+    countryEl.appendChild(btn);
+  });
+
+  // 도시 칩
+  const cityEl = document.getElementById('cityChips');
+  cityEl.innerHTML = '';
+  const cities = DESTINATIONS[selectedCountry]?.cities || {};
+  Object.keys(cities).forEach(city => {
+    const btn = document.createElement('button');
+    btn.className = 'chip' + (city === selectedCity ? ' selected' : '');
+    btn.textContent = city;
+    btn.onclick = () => { selectedCity = city; selectedAirport = cities[city].airports[0]; renderDestinationUI(); renderAirportUI(); };
+    cityEl.appendChild(btn);
+  });
+
+  renderAirportUI();
+}
+
+function renderAirportUI() {
+  const el = document.getElementById('airportChips');
+  if (!el) return;
+  el.innerHTML = '';
+  const airports = DESTINATIONS[selectedCountry]?.cities[selectedCity]?.airports || [];
+  // 미정 버튼
+  const noneBtn = document.createElement('button');
+  noneBtn.className = 'chip' + (!selectedAirport ? ' selected' : '');
+  noneBtn.textContent = '미정';
+  noneBtn.onclick = () => { selectedAirport = null; renderAirportUI(); };
+  el.appendChild(noneBtn);
+
+  airports.forEach(ap => {
+    const btn = document.createElement('button');
+    btn.className = 'chip' + (selectedAirport?.name === ap.name ? ' selected' : '');
+    btn.textContent = ap.short;
+    btn.title = ap.name;
+    btn.onclick = () => { selectedAirport = ap; renderAirportUI(); };
+    el.appendChild(btn);
+  });
+}
+
 function selectAirport(el, name, lat, lng) {
-  document.querySelectorAll('[id^="airportChip"]').forEach(c => c.classList.remove('selected'));
-  el.classList.add('selected');
   selectedAirport = name ? { name, lat, lng } : null;
+  renderAirportUI();
 }
 
 function changeDays(d) {
@@ -722,6 +860,7 @@ function goToPlanner() {
   activeDay = 0;
   customPlaces = {};
   excludedPlaces = {};
+  orderOverrides = {};
 
   // 헤더 업데이트
   document.getElementById('plannerSub').textContent = `${days}일 · 맛집+쇼핑`;
@@ -760,24 +899,28 @@ function getDayData(dayIdx) {
     ? { ...selectedHotel, cat: selectedHotel.cat || '숙소' }
     : null;
 
-  // 첫날: 공항 → (숙소 경유) → 관광지들
   if (isFirstDay && airport) {
     base[0] = airport;
-    if (hotel) base[base.length - 1] = hotel; // 첫날 마지막은 숙소
-  }
-  // 마지막날: 숙소 → 관광지들 → 공항
-  else if (isLastDay && airport) {
-    if (hotel) base[0] = hotel; // 마지막날 출발은 숙소
+    if (hotel) base[base.length - 1] = hotel;
+  } else if (isLastDay && airport) {
+    if (hotel) base[0] = hotel;
     base[base.length - 1] = airport;
-  }
-  // 중간날: 숙소 → 관광지 → 숙소
-  else if (hotel) {
+  } else if (hotel) {
     base[0] = { ...hotel };
     base[base.length - 1] = { ...hotel };
   }
 
   const extras = (customPlaces[dayIdx] || []).filter(p => !excluded.has(p.name));
-  const places = [...base.slice(0, base.length - 1), ...extras, base[base.length - 1]];
+  let places = [...base.slice(0, base.length - 1), ...extras, base[base.length - 1]];
+
+  // 사용자가 순서를 바꿨으면 그 순서 적용 (첫/끝 고정)
+  if (orderOverrides[dayIdx]) {
+    const first = places[0];
+    const last = places[places.length - 1];
+    const middle = orderOverrides[dayIdx].filter(p => p.name !== first.name && p.name !== last.name);
+    places = [first, ...middle, last];
+  }
+
   return { ...plan, places };
 }
 
@@ -796,31 +939,53 @@ function renderDayPlan() {
 function removePlace(name) {
   if (!excludedPlaces[activeDay]) excludedPlaces[activeDay] = new Set();
   excludedPlaces[activeDay].add(name);
-  // customPlaces에서도 제거
-  if (customPlaces[activeDay]) {
-    customPlaces[activeDay] = customPlaces[activeDay].filter(p => p.name !== name);
-  }
+  if (customPlaces[activeDay]) customPlaces[activeDay] = customPlaces[activeDay].filter(p => p.name !== name);
+  if (orderOverrides[activeDay]) orderOverrides[activeDay] = orderOverrides[activeDay].filter(p => p.name !== name);
   activeIdx = null;
   renderDayPlan();
 }
 
+// ── 드래그 상태 ──
+let dragSrc = null;
+
 function renderRoute(data) {
-  const plan = DAY_PLANS[activeDay] || DAY_PLANS[activeDay % DAY_PLANS.length];
-  const totalPlaces = plan.places.length;
   const list = document.getElementById('routeList');
   list.innerHTML = '';
   data.places.forEach((p, i) => {
     const isFirst = i === 0;
     const isLast = i === data.places.length - 1;
-    const canRemove = !isFirst && !isLast;
+    const canMove = !isFirst && !isLast;
+    const canRemove = canMove;
+
     const item = document.createElement('div');
     item.className = 'route-item' + (activeIdx === i ? ' active' : '');
+    item.dataset.idx = i;
+    if (canMove) {
+      item.draggable = true;
+      item.addEventListener('dragstart', e => { dragSrc = i; item.style.opacity='0.4'; e.dataTransfer.effectAllowed='move'; });
+      item.addEventListener('dragend', () => { item.style.opacity='1'; document.querySelectorAll('.route-item').forEach(el => el.classList.remove('drag-over')); });
+      item.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect='move'; item.classList.add('drag-over'); });
+      item.addEventListener('dragleave', () => item.classList.remove('drag-over'));
+      item.addEventListener('drop', e => {
+        e.preventDefault();
+        if (dragSrc === null || dragSrc === i) return;
+        const cur = getDayData(activeDay).places;
+        const arr = [...cur];
+        const [moved] = arr.splice(dragSrc, 1);
+        arr.splice(i, 0, moved);
+        orderOverrides[activeDay] = arr;
+        dragSrc = null;
+        renderDayPlan();
+      });
+    }
+
     item.innerHTML = `<div class="ri-row">
+      ${canMove ? `<div style="cursor:grab;padding:0 4px;color:#ccc;font-size:14px;flex-shrink:0;touch-action:none;" class="drag-handle">⠿</div>` : '<div style="width:12px;flex-shrink:0;"></div>'}
       <div class="ri-num">${i+1}</div>
       <div class="ri-info"><div class="ri-name">${p.name}</div><div class="ri-cat">${p.cat}</div></div>
       <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
         <div class="ri-time">${p.emoji}</div>
-        ${canRemove ? `<button onclick="event.stopPropagation();removePlace('${p.name}')" style="width:20px;height:20px;border-radius:50%;border:1px solid #ddd;background:none;cursor:pointer;font-size:12px;color:#999;display:flex;align-items:center;justify-content:center;flex-shrink:0;line-height:1;" title="제외">✕</button>` : ''}
+        ${canRemove ? `<button onclick="event.stopPropagation();removePlace('${p.name}')" style="width:20px;height:20px;border-radius:50%;border:1px solid #ddd;background:none;cursor:pointer;font-size:12px;color:#999;display:flex;align-items:center;justify-content:center;flex-shrink:0;" title="제외">✕</button>` : ''}
       </div>
     </div>`;
     item.onclick = () => { activeIdx = i; renderRoute(data); };
@@ -930,6 +1095,9 @@ function closeDiff() {
 }
 
 document.getElementById('searchInput').addEventListener('keydown', e => { if(e.key === 'Enter') doSearch(); });
+
+// 초기 UI 렌더
+renderDestinationUI();
 </script>
 </body>
 </html>
