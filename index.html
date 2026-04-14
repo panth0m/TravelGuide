@@ -868,6 +868,104 @@ function clearHotel() {
   document.getElementById('hotelInput').value = '';
 }
 
+function showHotelSearchStatus(message, tone = 'normal') {
+  const el = document.getElementById('hotelResults');
+  if (!el) return;
+  const color = tone === 'error' ? 'var(--accent-text)' : 'var(--text2)';
+  const bg = tone === 'error' ? 'var(--accent-light)' : 'var(--color-background-secondary)';
+  el.style.display = 'block';
+  el.innerHTML = `<div style="font-size:12px;color:${color};padding:8px 10px;background:${bg};border-radius:var(--border-radius-md);">${message}</div>`;
+}
+
+async function fetchJsonWithTimeout(url, options = {}, timeout = 7000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return await response.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function geocodeHotelLocation(name, area, cityName, countryName, countryCode, cityCenter) {
+  const exactQueries = [
+    [name, area, cityName, countryName].filter(Boolean).join(' '),
+    [name, cityName, countryName].filter(Boolean).join(' '),
+    ['hotel', name, cityName, countryName].filter(Boolean).join(' '),
+    [name, area, cityName].filter(Boolean).join(' '),
+  ].filter(Boolean);
+
+  const hotelTypes = ['hotel','hostel','motel','guest_house','guest house','resort'];
+  const withinReasonableRange = (lat, lng) => {
+    if (!cityCenter) return true;
+    return haversineKm({ lat, lng }, { lat: cityCenter[0], lng: cityCenter[1] }) <= 80;
+  };
+
+  for (const rawQuery of exactQueries) {
+    const query = encodeURIComponent(rawQuery);
+    try {
+      const nominatimUrl = `https://nominatim.openstreetmap.org/search?q=${query}&format=jsonv2&addressdetails=1&limit=6${countryCode ? `&countrycodes=${countryCode}` : ''}`;
+      const data = await fetchJsonWithTimeout(nominatimUrl, {
+        headers: { 'Accept-Language': 'ja,ko,en' }
+      }, 7000);
+      const best = (data || []).find(d => hotelTypes.includes(String(d.type || '').toLowerCase()) && withinReasonableRange(parseFloat(d.lat), parseFloat(d.lon)))
+        || (data || []).find(d => withinReasonableRange(parseFloat(d.lat), parseFloat(d.lon)));
+      if (best) {
+        return {
+          lat: parseFloat(best.lat),
+          lng: parseFloat(best.lon),
+          source: 'nominatim',
+          label: best.display_name || rawQuery,
+          exact: hotelTypes.includes(String(best.type || '').toLowerCase()),
+        };
+      }
+    } catch (e) {}
+
+    try {
+      const photonUrl = `https://photon.komoot.io/api/?q=${query}&limit=6&lang=en`;
+      const photon = await fetchJsonWithTimeout(photonUrl, {}, 7000);
+      const features = photon?.features || [];
+      const bestFeature = features.find(f => {
+        const coords = f?.geometry?.coordinates || [];
+        return coords.length >= 2 && withinReasonableRange(coords[1], coords[0]);
+      });
+      if (bestFeature) {
+        const coords = bestFeature.geometry.coordinates;
+        return {
+          lat: parseFloat(coords[1]),
+          lng: parseFloat(coords[0]),
+          source: 'photon',
+          label: bestFeature?.properties?.name || rawQuery,
+          exact: true,
+        };
+      }
+    } catch (e) {}
+  }
+
+  if (area) {
+    const areaQuery = encodeURIComponent([area, cityName, countryName].filter(Boolean).join(' '));
+    try {
+      const areaData = await fetchJsonWithTimeout(`https://nominatim.openstreetmap.org/search?q=${areaQuery}&format=jsonv2&addressdetails=1&limit=3${countryCode ? `&countrycodes=${countryCode}` : ''}`, {
+        headers: { 'Accept-Language': 'ja,ko,en' }
+      }, 7000);
+      const areaBest = (areaData || []).find(d => withinReasonableRange(parseFloat(d.lat), parseFloat(d.lon)));
+      if (areaBest) {
+        return {
+          lat: parseFloat(areaBest.lat),
+          lng: parseFloat(areaBest.lon),
+          source: 'area-fallback',
+          label: areaBest.display_name || area,
+          exact: false,
+        };
+      }
+    } catch (e) {}
+  }
+
+  return null;
+}
+
 async function addCustomHotel() {
   const name = document.getElementById('customHotelName').value.trim();
   const area = document.getElementById('customHotelArea').value.trim();
@@ -881,45 +979,29 @@ async function addCustomHotel() {
 
   const countryName = (selectedCountry || '').replace(/^[^ ]+\s*/, '').trim();
   const cityName = selectedCity || '';
-
-  // Nominatim으로 실제 좌표 검색 (선택한 도시/국가 기준)
-  const queries = [
-    `${name} ${area} ${cityName} ${countryName}`,
-    `${name} ${cityName} ${countryName}`,
-    `hotel ${name} ${cityName} ${countryName}`,
-  ].filter(Boolean).map(q => encodeURIComponent(q));
+  const countryCodeMap = {
+    '🇯🇵 일본':'jp', '🇫🇷 프랑스':'fr', '🇬🇧 영국':'gb', '🇹🇭 태국':'th',
+    '🇻🇳 베트남':'vn', '🇦🇺 호주':'au', '🇰🇷 한국':'kr'
+  };
+  const countryCode = countryCodeMap[selectedCountry] || '';
+  const cityCenter = DESTINATIONS[selectedCountry]?.cities[selectedCity]?.center || null;
 
   try {
-    let found = false;
-    for (const query of queries) {
-      const countryCodeMap = {
-        '🇯🇵 일본':'jp', '🇫🇷 프랑스':'fr', '🇬🇧 영국':'gb', '🇹🇭 태국':'th',
-        '🇻🇳 베트남':'vn', '🇦🇺 호주':'au', '🇰🇷 한국':'kr'
-      };
-      const countryCode = countryCodeMap[selectedCountry] || '';
-      const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${query}&format=json&limit=3${countryCode ? `&countrycodes=${countryCode}` : ''}`, {
-        headers: { 'Accept-Language': 'ja,ko,en' }
-      });
-      const data = await res.json();
-      // 숙박시설 우선, 없으면 첫번째 결과
-      const best = data.find(d => d.type && ['hotel','hostel','motel','guest_house'].includes(d.type)) || data[0];
-      if (best) {
-        const lat = parseFloat(best.lat);
-        const lng = parseFloat(best.lon);
-        selectHotel(name, area ? `숙소 · ${area}` : '숙소', lat, lng);
-        found = true;
-        break;
+    const match = await geocodeHotelLocation(name, area, cityName, countryName, countryCode, cityCenter);
+    if (match) {
+      const cat = area ? `숙소 · ${area}` : (match.exact ? '숙소' : '숙소 · 대략적 위치');
+      selectHotel(name, cat, match.lat, match.lng);
+      if (!match.exact) {
+        showHotelSearchStatus(`정확한 숙소 좌표를 찾지 못해 ${area || cityName} 기준의 대략적 위치로 표시했습니다.`, 'normal');
       }
+      return;
     }
-    if (!found) {
-      // Nominatim 실패 시 지역명 기반 fallback
-      const cityCenter = DESTINATIONS[selectedCountry]?.cities[selectedCity]?.center || [35.6812, 139.7671];
-      selectHotel(name, area ? `숙소 · ${area}` : '숙소', cityCenter[0], cityCenter[1]);
-    }
+
+    showHotelSearchStatus('숙소 위치를 찾지 못했습니다. 호텔명과 지역명을 함께 입력해 주세요. 이제는 찾지 못해도 자동으로 도쿄역으로 넣지 않습니다.', 'error');
   } catch(e) {
-    // 네트워크 오류 시 도시 중심 fallback
-    const cityCenter = DESTINATIONS[selectedCountry]?.cities[selectedCity]?.center || [35.6812, 139.7671];
-    selectHotel(name, area ? `숙소 · ${area}` : '숙소', cityCenter[0], cityCenter[1]);
+    showHotelSearchStatus('숙소 위치 검색 중 오류가 발생했습니다. 잠시 후 다시 시도하거나 지역명을 함께 입력해 주세요.', 'error');
+  } finally {
+    if (btn) { btn.textContent = '이 숙소로 설정'; btn.disabled = false; }
   }
 }
 
