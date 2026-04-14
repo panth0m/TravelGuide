@@ -1142,6 +1142,105 @@ function escapeJsAttr(value) {
   return String(value || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
+function haversineKm(a, b) {
+  if (!a || !b) return 0;
+  const toRad = deg => deg * Math.PI / 180;
+  const lat1 = Number(a.lat), lng1 = Number(a.lng);
+  const lat2 = Number(b.lat), lng2 = Number(b.lng);
+  if ([lat1, lng1, lat2, lng2].some(v => Number.isNaN(v))) return 0;
+  const R = 6371;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const x = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+  return R * c;
+}
+
+function getMoneyConfig(sampleCost = '') {
+  const sample = String(sampleCost || '').trim();
+  if (sample.startsWith('A$')) return { prefix: 'A$', suffix: '', decimals: 0, base: 4, perKm: 0.38, airportExtra: 6, roundTo: 1 };
+  if (sample.startsWith('¥')) return { prefix: '¥', suffix: '', decimals: 0, base: 180, perKm: 18, airportExtra: 260, roundTo: 10 };
+  if (sample.startsWith('€')) return { prefix: '€', suffix: '', decimals: 0, base: 2, perKm: 0.7, airportExtra: 3, roundTo: 1 };
+  if (sample.startsWith('£')) return { prefix: '£', suffix: '', decimals: 0, base: 3, perKm: 0.22, airportExtra: 3, roundTo: 1 };
+  if (sample.startsWith('฿')) return { prefix: '฿', suffix: '', decimals: 0, base: 18, perKm: 3, airportExtra: 30, roundTo: 1 };
+  if (sample.startsWith('₫')) return { prefix: '₫', suffix: 'K', decimals: 0, base: 15, perKm: 7, airportExtra: 20, roundTo: 5, multiplier: 1000 };
+  return { prefix: '¥', suffix: '', decimals: 0, base: 180, perKm: 18, airportExtra: 260, roundTo: 10 };
+}
+
+function roundMoney(value, config) {
+  const step = config.roundTo || 1;
+  return Math.max(0, Math.round(value / step) * step);
+}
+
+function formatMoney(value, config) {
+  const safeValue = Math.max(0, value || 0);
+  if (config.multiplier) {
+    return `${config.prefix}${Math.round(safeValue)}${config.suffix || ''}`;
+  }
+  const rounded = config.decimals > 0 ? safeValue.toFixed(config.decimals) : Math.round(safeValue).toString();
+  return `${config.prefix}${rounded}${config.suffix || ''}`;
+}
+
+function isAirportPlace(place) {
+  return !!place && String(place.cat || '').includes('공항');
+}
+
+function estimateSegment(a, b, sampleCost) {
+  const km = haversineKm(a, b);
+  if (km <= 0.12) {
+    return { mode: 'walk', mins: 3, cost: 0 };
+  }
+
+  const airportLeg = isAirportPlace(a) || isAirportPlace(b);
+  let mode = km <= 1.4 ? 'walk' : 'transit';
+
+  if (airportLeg && km > 0.8) mode = 'transit';
+
+  if (mode === 'walk') {
+    return {
+      mode,
+      mins: Math.max(5, Math.round(km * 14)),
+      cost: 0,
+    };
+  }
+
+  const money = getMoneyConfig(sampleCost);
+  let mins = Math.max(10, Math.round(km * 3.4 + 8));
+  if (airportLeg) mins += 12;
+  if (km > 25) mins += 8;
+
+  let cost = money.base + km * money.perKm + (airportLeg ? money.airportExtra : 0);
+  if (km > 25) cost += km * money.perKm * 0.35;
+  if (money.multiplier) {
+    cost = roundMoney(cost, money) * money.multiplier;
+  } else {
+    cost = roundMoney(cost, money);
+  }
+
+  return { mode, mins, cost };
+}
+
+function buildDynamicMetrics(places, sampleCost) {
+  const money = getMoneyConfig(sampleCost);
+  const segs = [];
+  let totalMins = 0;
+  let totalCost = 0;
+
+  for (let i = 0; i < places.length - 1; i++) {
+    const seg = estimateSegment(places[i], places[i + 1], sampleCost);
+    segs.push(seg);
+    totalMins += seg.mins;
+    totalCost += seg.cost;
+  }
+
+  const costForLabel = money.multiplier ? Math.round(totalCost / money.multiplier) : totalCost;
+  return {
+    segs,
+    time: `${totalMins}분`,
+    cost: formatMoney(costForLabel, money),
+  };
+}
+
 function getDayData(dayIdx, options = {}) {
   const { applyExcluded = true, applyOrder = true } = options;
   const plans = getActivePlans();
@@ -1199,7 +1298,8 @@ function getDayData(dayIdx, options = {}) {
     });
   }
 
-  return { ...plan, places };
+  const metrics = buildDynamicMetrics(places, plan.cost);
+  return { ...plan, places, segs: metrics.segs, time: metrics.time, cost: metrics.cost };
 }
 
 function getRemovedPlaces(dayIdx) {
@@ -1397,7 +1497,28 @@ function doSearch() {
   el.classList.add('open');
 }
 
+function showDiffCard(beforeData, afterData) {
+  const card = document.getElementById('diffCard');
+  if (!card || !beforeData || !afterData) return;
+  card.innerHTML = `
+    <button class="diff-close" onclick="closeDiff()">✕</button>
+    <div class="diff-title">장소 추가 후 변경사항</div>
+    <div class="diff-row">
+      <div class="diff-item">
+        <div class="diff-label">총 이동시간</div>
+        <div class="diff-vals"><span>${beforeData.time}</span><span class="diff-arrow">→</span><span class="diff-after">${afterData.time}</span></div>
+      </div>
+      <div class="diff-item">
+        <div class="diff-label">교통비</div>
+        <div class="diff-vals"><span>${beforeData.cost}</span><span class="diff-arrow">→</span><span class="diff-after">${afterData.cost}</span></div>
+      </div>
+    </div>
+  `;
+  card.classList.add('show');
+}
+
 function addPlace(name, cat, type, lat, lng) {
+  const beforeData = getDayData(activeDay);
   const emoji = (TYPE_META[type] || {}).emoji || '📍';
   if (!customPlaces[activeDay]) customPlaces[activeDay] = [];
 
@@ -1418,8 +1539,9 @@ function addPlace(name, cat, type, lat, lng) {
   document.getElementById('dot2').classList.remove('active');
   document.getElementById('dot3').classList.add('active');
 
+  const afterData = getDayData(activeDay);
   renderDayPlan();
-  document.getElementById('diffCard').classList.add('show');
+  showDiffCard(beforeData, afterData);
 }
 
 function closeDiff() {
