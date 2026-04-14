@@ -118,6 +118,12 @@ body { font-family: 'Noto Sans KR', sans-serif; color: var(--text1); background:
 /* RIGHT MAP */
 .map-area { flex: 1; position: relative; overflow: hidden; }
 #leafletMap { width: 100%; height: 100%; }
+.map-toolbar { position:absolute; top:12px; right:12px; z-index:800; display:flex; flex-direction:column; gap:8px; align-items:flex-end; }
+.map-mode-btn { padding:8px 12px; border:none; border-radius:999px; background:var(--bg); color:var(--text1); box-shadow:0 2px 8px rgba(0,0,0,0.12); cursor:pointer; font-size:12px; font-family:inherit; font-weight:500; }
+.map-mode-btn.active { background:var(--accent); color:#fff; }
+.map-note { max-width:240px; padding:7px 10px; border-radius:12px; background:rgba(255,255,255,0.95); color:var(--text2); font-size:11px; line-height:1.45; box-shadow:0 2px 8px rgba(0,0,0,0.08); }
+.map-hint { position:absolute; left:50%; top:12px; transform:translateX(-50%); z-index:790; display:none; padding:8px 12px; border-radius:999px; background:rgba(216,90,48,0.95); color:#fff; font-size:12px; font-weight:500; box-shadow:0 2px 8px rgba(0,0,0,0.12); }
+.map-hint.show { display:block; }
 
 /* DIFF CARD */
 .diff-card { position: absolute; bottom: 12px; left: 12px; right: 12px; background: var(--bg); border: 0.5px solid var(--border); border-radius: var(--radius-lg); padding: 12px 14px; display: none; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
@@ -197,6 +203,9 @@ body { font-family: 'Noto Sans KR', sans-serif; color: var(--text1); background:
 
   /* diff card */
   .diff-card { bottom: auto; top: 8px; left: 8px; right: 8px; }
+  .map-toolbar { top: 8px; right: 8px; }
+  .map-note { max-width: 180px; font-size: 10px; }
+  .map-hint { top: 52px; width: calc(100% - 24px); text-align: center; border-radius: 12px; }
 
   /* 탭 스크롤 */
   .day-tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; }
@@ -334,6 +343,11 @@ body { font-family: 'Noto Sans KR', sans-serif; color: var(--text1); background:
 
     <!-- MAP AREA -->
     <div class="map-area">
+      <div class="map-toolbar">
+        <button type="button" class="map-mode-btn" id="mapAddBtn" onclick="toggleMapAddMode()">핀으로 추가</button>
+        <div class="map-note">배경지도 글씨는 타일 제공 방식상 자동 한글화가 어렵습니다. 대신 일정·핀 이름은 한국어로 표시됩니다.</div>
+      </div>
+      <div class="map-hint" id="mapHint">핀 추가 모드 · 지도를 한 번 눌러 이 위치를 일정에 추가하세요</div>
       <div id="leafletMap"></div>
 
       <div class="diff-card" id="diffCard">
@@ -1081,6 +1095,8 @@ let orderOverrides = {};
 let map = null;
 let markersLayer = [];
 let routeLine = null;
+let mapAddMode = false;
+let tempPickMarker = null;
 
 function initMap() {
   if (map) return;
@@ -1103,10 +1119,94 @@ function initMap() {
     }
     tryNext();
   }
+  map.on('click', onMapClickAddPlace);
   addTileLayer();
 }
 
 // ── 숙소 검색 ──
+
+function getPlainCountryName(label = '') {
+  return String(label || '').replace(/^[^\p{L}\p{N}]+\s*/u, '').trim();
+}
+
+function toggleMapAddMode(forceValue) {
+  mapAddMode = typeof forceValue === 'boolean' ? forceValue : !mapAddMode;
+  const btn = document.getElementById('mapAddBtn');
+  const hint = document.getElementById('mapHint');
+  if (btn) btn.classList.toggle('active', mapAddMode);
+  if (hint) hint.classList.toggle('show', mapAddMode);
+  if (!mapAddMode && tempPickMarker && map) {
+    map.removeLayer(tempPickMarker);
+    tempPickMarker = null;
+  }
+}
+
+function setTempPickMarker(lat, lng) {
+  if (!map) return;
+  if (tempPickMarker) map.removeLayer(tempPickMarker);
+  tempPickMarker = L.marker([lat, lng]).addTo(map);
+}
+
+async function reverseGeocodePoint(lat, lng) {
+  const plainCountry = getPlainCountryName(selectedCountry);
+  const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}&zoom=18&addressdetails=1`;
+  try {
+    const data = await fetchJsonWithTimeout(url, { headers: { 'Accept-Language': 'ko,en' } }, 7000);
+    const address = data && data.address ? data.address : {};
+    const parts = [address.amenity, address.tourism, address.attraction, address.shop, address.building, address.road, address.suburb, address.city, address.town, address.village].filter(Boolean);
+    const bestName = data.name || parts[0] || `${selectedCity} 핀 장소`;
+    const bestCat = address.amenity || address.shop || address.tourism || address.leisure || address.building || '직접추가';
+    return {
+      name: bestName,
+      cat: bestCat,
+      display: data.display_name || `${selectedCity}, ${plainCountry}`,
+    };
+  } catch (e) {
+    return {
+      name: `${selectedCity} 핀 장소`,
+      cat: '직접추가',
+      display: `${selectedCity}, ${plainCountry}`,
+    };
+  }
+}
+
+async function onMapClickAddPlace(e) {
+  if (!mapAddMode) return;
+  const { lat, lng } = e.latlng;
+  setTempPickMarker(lat, lng);
+  const info = await reverseGeocodePoint(lat, lng);
+  const defaultName = info.name || `${selectedCity} 핀 장소`;
+  const defaultCat = info.cat || '직접추가';
+  const name = window.prompt('이 위치 이름을 입력하세요.', defaultName);
+  if (name === null) return;
+  const finalName = String(name || '').trim() || defaultName;
+  const cat = window.prompt('카테고리를 입력하세요.', defaultCat);
+  const finalCat = String(cat || '').trim() || defaultCat;
+  addMapPinPlace(finalName, finalCat, lat, lng);
+  toggleMapAddMode(false);
+}
+
+function addMapPinPlace(name, cat, lat, lng) {
+  const beforeData = getDayData(activeDay);
+  if (!customPlaces[activeDay]) customPlaces[activeDay] = [];
+  const nextIdx = customPlaces[activeDay].length;
+  customPlaces[activeDay].push({
+    name,
+    cat,
+    emoji: '📍',
+    lat,
+    lng,
+    type: 'custom_pin',
+    instanceKey: `pin-${activeDay}-${nextIdx}-${Date.now()}`,
+    sourceType: 'custom_pin',
+  });
+  clearExcludedPlaceByName(activeDay, name);
+  activeIdx = null;
+  const afterData = getDayData(activeDay);
+  renderDayPlan();
+  showDiffCard(beforeData, afterData);
+}
+
 function searchHotel() {
   const q = document.getElementById('hotelInput').value.trim().toLowerCase();
   // 쿼리 없으면 전체 호텔 표시
