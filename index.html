@@ -112,6 +112,8 @@ body { font-family: 'Noto Sans KR', sans-serif; color: var(--text1); background:
 .result-dot.restaurant { background: var(--accent); }
 .result-dot.cafe { background: #BA7517; }
 .result-dot.shopping { background: var(--transit); }
+.result-dot.hotel { background: #7B5EA7; }
+.result-dot.sightseeing { background: var(--walk); }
 
 /* RIGHT MAP */
 .map-area { flex: 1; position: relative; overflow: hidden; }
@@ -271,6 +273,16 @@ body { font-family: 'Noto Sans KR', sans-serif; color: var(--text1); background:
         </div>
       </div>
 
+      <div class="section-gap">
+        <div class="section-title">숙소 (선택)</div>
+        <div style="display:flex;gap:6px;">
+          <input id="hotelInput" class="search-input" type="text" placeholder="숙소 이름 검색 (예: APA, 하얏트)" style="flex:1;font-size:13px;padding:8px 10px;">
+          <button class="search-btn" onclick="searchHotel()" style="font-size:12px;">검색</button>
+        </div>
+        <div id="hotelResults" style="margin-top:6px;display:none;"></div>
+        <div id="hotelSelected" style="margin-top:6px;display:none;"></div>
+      </div>
+
       <button class="cta-btn" onclick="goToPlanner()">추천 동선 생성 →</button>
     </div>
   </div>
@@ -294,7 +306,7 @@ body { font-family: 'Noto Sans KR', sans-serif; color: var(--text1); background:
 
       <div class="add-panel">
         <div class="search-row">
-          <input class="search-input" type="text" id="searchInput" placeholder="장소 검색 (예: 라멘, 카페)">
+          <input class="search-input" type="text" id="searchInput" placeholder="맛집·카페·쇼핑·숙소·관광지 검색">
           <button class="search-btn" onclick="doSearch()">검색</button>
         </div>
         <div class="search-results" id="searchResults"></div>
@@ -447,26 +459,70 @@ const DAY_PLANS = [
   },
 ];
 
-const SEARCH_RESULTS_DATA = {
-  'default': [
-    { name:'이치란 라멘 시부야점', cat:'맛집', type:'restaurant', area:'시부야', lat:35.6590, lng:139.7001 },
-    { name:'블루보틀 아오야마', cat:'카페', type:'cafe', area:'아오야마', lat:35.6654, lng:139.7128 },
-    { name:'돈키호테 시부야점', cat:'쇼핑', type:'shopping', area:'시부야', lat:35.6582, lng:139.6988 },
-  ],
-  '라멘': [
-    { name:'이치란 라멘 시부야점', cat:'맛집', type:'restaurant', area:'시부야', lat:35.6590, lng:139.7001 },
-    { name:'후쿠류무라 긴자점', cat:'맛집', type:'restaurant', area:'긴자', lat:35.6717, lng:139.7651 },
-  ],
-  '카페': [
-    { name:'블루보틀 아오야마', cat:'카페', type:'cafe', area:'아오야마', lat:35.6654, lng:139.7128 },
-    { name:'% 아라비카 아라쿠라', cat:'카페', type:'cafe', area:'긴자', lat:35.6690, lng:139.7620 },
-  ],
+// ── 전체 검색 DB ──
+const ALL_PLACES = [
+  // 맛집
+  { name:'이치란 라멘 시부야점', cat:'맛집', type:'restaurant', area:'시부야', lat:35.6590, lng:139.7001 },
+  { name:'후쿠류무라 긴자점', cat:'맛집', type:'restaurant', area:'긴자', lat:35.6717, lng:139.7651 },
+  { name:'스시 사이토', cat:'맛집/스시', type:'restaurant', area:'미나토', lat:35.6584, lng:139.7454 },
+  { name:'규카츠 모토무라 신주쿠', cat:'맛집/규카츠', type:'restaurant', area:'신주쿠', lat:35.6896, lng:139.7006 },
+  { name:'덴푸라 나카야마', cat:'맛집/덴푸라', type:'restaurant', area:'아사쿠사', lat:35.7117, lng:139.7966 },
+  { name:'몬자야키 츠키시마', cat:'맛집/몬자', type:'restaurant', area:'츠키시마', lat:35.6618, lng:139.7839 },
+  { name:'야키토리 유라쿠초', cat:'맛집/이자카야', type:'restaurant', area:'유라쿠초', lat:35.6751, lng:139.7630 },
+  { name:'우동 도도이츠 아키하바라', cat:'맛집/우동', type:'restaurant', area:'아키하바라', lat:35.7022, lng:139.7741 },
+
+  // 카페
+  { name:'블루보틀 아오야마', cat:'카페', type:'cafe', area:'아오야마', lat:35.6654, lng:139.7128 },
+  { name:'% 아라비카 긴자', cat:'카페', type:'cafe', area:'긴자', lat:35.6690, lng:139.7620 },
+  { name:'스타벅스 리저브 나카메구로', cat:'카페', type:'cafe', area:'나카메구로', lat:35.6438, lng:139.6990 },
+  { name:'푸글렌 도쿄', cat:'카페', type:'cafe', area:'도미가야', lat:35.6697, lng:139.6913 },
+  { name:'카페 키츠네 아오야마', cat:'카페', type:'cafe', area:'아오야마', lat:35.6641, lng:139.7104 },
+
+  // 쇼핑
+  { name:'돈키호테 시부야점', cat:'쇼핑', type:'shopping', area:'시부야', lat:35.6582, lng:139.6988 },
+  { name:'도큐핸즈 시부야', cat:'쇼핑', type:'shopping', area:'시부야', lat:35.6591, lng:139.7025 },
+  { name:'유니클로 긴자', cat:'쇼핑/패션', type:'shopping', area:'긴자', lat:35.6699, lng:139.7637 },
+  { name:'빅카메라 아키하바라', cat:'쇼핑/전자', type:'shopping', area:'아키하바라', lat:35.6983, lng:139.7731 },
+  { name:'이세탄 신주쿠', cat:'쇼핑/백화점', type:'shopping', area:'신주쿠', lat:35.6917, lng:139.7044 },
+  { name:'라포레 하라주쿠', cat:'쇼핑/패션', type:'shopping', area:'하라주쿠', lat:35.6702, lng:139.7027 },
+
+  // 숙소
+  { name:'도쿄 스테이션 호텔', cat:'숙소/특급', type:'hotel', area:'도쿄역', lat:35.6812, lng:139.7660 },
+  { name:'파크 하얏트 도쿄', cat:'숙소/특급', type:'hotel', area:'신주쿠', lat:35.6855, lng:139.6924 },
+  { name:'APA 호텔 신주쿠', cat:'숙소/비즈니스', type:'hotel', area:'신주쿠', lat:35.6943, lng:139.7003 },
+  { name:'더 캐피톨 호텔 도큐', cat:'숙소/특급', type:'hotel', area:'나가타초', lat:35.6742, lng:139.7430 },
+  { name:'도요코인 아사쿠사', cat:'숙소/비즈니스', type:'hotel', area:'아사쿠사', lat:35.7120, lng:139.7950 },
+  { name:'아사쿠사 게스트하우스 카게츠', cat:'숙소/게스트하우스', type:'hotel', area:'아사쿠사', lat:35.7140, lng:139.7930 },
+  { name:'신주쿠 캡슐 호텔 안신', cat:'숙소/캡슐', type:'hotel', area:'신주쿠', lat:35.6920, lng:139.7010 },
+
+  // 관광지
+  { name:'메이지 신궁', cat:'관광/신사', type:'sightseeing', area:'하라주쿠', lat:35.6763, lng:139.6993 },
+  { name:'도쿄 스카이트리', cat:'관광/전망대', type:'sightseeing', area:'오시아게', lat:35.7101, lng:139.8107 },
+  { name:'도쿄 타워', cat:'관광/전망대', type:'sightseeing', area:'미나토', lat:35.6586, lng:139.7454 },
+  { name:'황거 동쪽 정원', cat:'관광/공원', type:'sightseeing', area:'치요다', lat:35.6852, lng:139.7528 },
+  { name:'시바 공원', cat:'관광/공원', type:'sightseeing', area:'미나토', lat:35.6562, lng:139.7486 },
+  { name:'하마리큐 정원', cat:'관광/정원', type:'sightseeing', area:'츠키지', lat:35.6598, lng:139.7633 },
+  { name:'팀랩 보더리스', cat:'관광/예술', type:'sightseeing', area:'아즈마바시', lat:35.7101, lng:139.8014 },
+  { name:'국립 도쿄 박물관', cat:'관광/박물관', type:'sightseeing', area:'우에노', lat:35.7187, lng:139.7762 },
+  { name:'모리 미술관', cat:'관광/미술관', type:'sightseeing', area:'롯폰기', lat:35.6604, lng:139.7292 },
+  { name:'나카메구로 강변', cat:'관광/산책', type:'sightseeing', area:'나카메구로', lat:35.6438, lng:139.6990 },
+];
+
+// 타입별 색상/이모지
+const TYPE_META = {
+  restaurant: { dot:'#D85A30', emoji:'🍜' },
+  cafe:       { dot:'#BA7517', emoji:'☕' },
+  shopping:   { dot:'#378ADD', emoji:'🛍' },
+  hotel:      { dot:'#7B5EA7', emoji:'🏨' },
+  sightseeing:{ dot:'#1D9E75', emoji:'🏛' },
 };
 
 let days = 1;
 let activeDay = 0;
 let activeIdx = null;
 let customPlaces = {};
+let excludedPlaces = {};
+let selectedHotel = null; // { name, cat, emoji, lat, lng }
 
 // ── Leaflet 지도 초기화 ──
 let map = null;
@@ -497,6 +553,54 @@ function initMap() {
   addTileLayer();
 }
 
+// ── 숙소 검색 ──
+function searchHotel() {
+  const q = document.getElementById('hotelInput').value.trim().toLowerCase();
+  const hotels = ALL_PLACES.filter(p => p.type === 'hotel' && (
+    !q || p.name.toLowerCase().includes(q) || p.area.toLowerCase().includes(q) || p.cat.toLowerCase().includes(q)
+  )).slice(0, 5);
+
+  const el = document.getElementById('hotelResults');
+  el.innerHTML = '';
+  if (hotels.length === 0) {
+    el.innerHTML = '<div style="font-size:12px;color:var(--text2);padding:4px 0;">검색 결과 없음</div>';
+    el.style.display = 'block';
+    return;
+  }
+  hotels.forEach(h => {
+    const item = document.createElement('div');
+    item.style.cssText = 'display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:0.5px solid var(--color-border-tertiary);cursor:pointer;';
+    item.innerHTML = `<div style="width:8px;height:8px;border-radius:50%;background:#7B5EA7;flex-shrink:0;"></div>
+      <div style="flex:1;min-width:0;"><div style="font-size:13px;font-weight:500;">${h.name}</div><div style="font-size:11px;color:var(--text2);">${h.cat} · ${h.area}</div></div>
+      <button onclick="selectHotel('${h.name}','${h.cat}',${h.lat},${h.lng})" style="font-size:11px;padding:3px 8px;border:0.5px solid var(--color-border-secondary);border-radius:var(--border-radius-md);background:var(--color-background-primary);cursor:pointer;font-family:inherit;">선택</button>`;
+    el.appendChild(item);
+  });
+  el.style.display = 'block';
+}
+
+function selectHotel(name, cat, lat, lng) {
+  selectedHotel = { name, cat, emoji:'🏨', lat, lng };
+  document.getElementById('hotelResults').style.display = 'none';
+  document.getElementById('hotelInput').value = '';
+
+  const sel = document.getElementById('hotelSelected');
+  sel.style.display = 'flex';
+  sel.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--color-background-secondary);border-radius:var(--border-radius-md);margin-top:6px;';
+  sel.innerHTML = `<span style="font-size:16px;">🏨</span>
+    <div style="flex:1;min-width:0;"><div style="font-size:13px;font-weight:500;">${name}</div><div style="font-size:11px;color:var(--text2);">${cat}</div></div>
+    <button onclick="clearHotel()" style="font-size:11px;padding:3px 8px;border:0.5px solid var(--color-border-secondary);border-radius:var(--border-radius-md);background:none;cursor:pointer;font-family:inherit;color:var(--text2);">취소</button>`;
+}
+
+function clearHotel() {
+  selectedHotel = null;
+  document.getElementById('hotelSelected').style.display = 'none';
+  document.getElementById('hotelInput').value = '';
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('hotelInput').addEventListener('keydown', e => { if(e.key === 'Enter') searchHotel(); });
+});
+
 function changeDays(d) {
   days = Math.max(1, Math.min(7, days + d));
   document.getElementById('daysVal').textContent = days;
@@ -512,6 +616,7 @@ function goToPlanner() {
 
   activeDay = 0;
   customPlaces = {};
+  excludedPlaces = {};
 
   // 헤더 업데이트
   document.getElementById('plannerSub').textContent = `${days}일 · 맛집+쇼핑`;
@@ -534,9 +639,21 @@ function renderTabs() {
 
 function getDayData(dayIdx) {
   const plan = DAY_PLANS[dayIdx] || DAY_PLANS[dayIdx % DAY_PLANS.length];
-  const base = plan.places.map(p => ({...p}));
-  const extras = customPlaces[dayIdx] || [];
-  // 마지막 장소 앞에 커스텀 장소 삽입
+  const excluded = excludedPlaces[dayIdx] || new Set();
+
+  let base = plan.places.map(p => ({...p})).filter((p, i) => {
+    if (i === 0 || i === plan.places.length - 1) return true;
+    return !excluded.has(p.name);
+  });
+
+  // 숙소가 선택된 경우 출발지·도착지를 숙소로 교체
+  if (selectedHotel) {
+    const hotelPlace = { ...selectedHotel, cat: selectedHotel.cat || '숙소' };
+    base[0] = { ...hotelPlace };                      // 출발지
+    base[base.length - 1] = { ...hotelPlace };        // 도착지
+  }
+
+  const extras = (customPlaces[dayIdx] || []).filter(p => !excluded.has(p.name));
   const places = [...base.slice(0, base.length - 1), ...extras, base[base.length - 1]];
   return { ...plan, places };
 }
@@ -553,16 +670,35 @@ function renderDayPlan() {
   renderMap(data);
 }
 
+function removePlace(name) {
+  if (!excludedPlaces[activeDay]) excludedPlaces[activeDay] = new Set();
+  excludedPlaces[activeDay].add(name);
+  // customPlaces에서도 제거
+  if (customPlaces[activeDay]) {
+    customPlaces[activeDay] = customPlaces[activeDay].filter(p => p.name !== name);
+  }
+  activeIdx = null;
+  renderDayPlan();
+}
+
 function renderRoute(data) {
+  const plan = DAY_PLANS[activeDay] || DAY_PLANS[activeDay % DAY_PLANS.length];
+  const totalPlaces = plan.places.length;
   const list = document.getElementById('routeList');
   list.innerHTML = '';
   data.places.forEach((p, i) => {
+    const isFirst = i === 0;
+    const isLast = i === data.places.length - 1;
+    const canRemove = !isFirst && !isLast;
     const item = document.createElement('div');
     item.className = 'route-item' + (activeIdx === i ? ' active' : '');
     item.innerHTML = `<div class="ri-row">
       <div class="ri-num">${i+1}</div>
       <div class="ri-info"><div class="ri-name">${p.name}</div><div class="ri-cat">${p.cat}</div></div>
-      <div class="ri-time">${p.emoji}</div>
+      <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+        <div class="ri-time">${p.emoji}</div>
+        ${canRemove ? `<button onclick="event.stopPropagation();removePlace('${p.name}')" style="width:20px;height:20px;border-radius:50%;border:1px solid #ddd;background:none;cursor:pointer;font-size:12px;color:#999;display:flex;align-items:center;justify-content:center;flex-shrink:0;line-height:1;" title="제외">✕</button>` : ''}
+      </div>
     </div>`;
     item.onclick = () => { activeIdx = i; renderRoute(data); };
     list.appendChild(item);
@@ -619,15 +755,31 @@ function renderMap(data) {
 }
 
 function doSearch() {
-  const q = document.getElementById('searchInput').value.trim();
-  const key = Object.keys(SEARCH_RESULTS_DATA).find(k => q.includes(k)) || 'default';
-  const results = SEARCH_RESULTS_DATA[key];
+  const q = document.getElementById('searchInput').value.trim().toLowerCase();
   const el = document.getElementById('searchResults');
   el.innerHTML = '';
-  results.forEach(r => {
+
+  // 퍼지 검색: 이름/카테고리/지역 모두 매칭
+  let results = q
+    ? ALL_PLACES.filter(r =>
+        r.name.toLowerCase().includes(q) ||
+        r.cat.toLowerCase().includes(q) ||
+        r.area.toLowerCase().includes(q) ||
+        r.type.toLowerCase().includes(q)
+      )
+    : ALL_PLACES.slice(0, 8);
+
+  if (results.length === 0) {
+    el.innerHTML = '<div style="padding:8px 0;font-size:12px;color:var(--text2);">검색 결과가 없어요</div>';
+    el.classList.add('open');
+    return;
+  }
+
+  results.slice(0, 8).forEach(r => {
+    const meta = TYPE_META[r.type] || { dot:'#999', emoji:'📍' };
     const item = document.createElement('div');
     item.className = 'result-item';
-    item.innerHTML = `<div class="result-dot ${r.type}"></div>
+    item.innerHTML = `<div class="result-dot" style="background:${meta.dot}"></div>
       <div class="ri-info"><div class="ri-name">${r.name}</div><div class="ri-cat">${r.cat} · ${r.area}</div></div>
       <button style="font-size:11px;padding:3px 8px;border:0.5px solid var(--color-border-secondary);border-radius:var(--border-radius-md);background:var(--color-background-primary);cursor:pointer;color:var(--color-text-primary);font-family:inherit;" onclick="addPlace('${r.name}','${r.cat}','${r.type}',${r.lat},${r.lng})">추가</button>`;
     el.appendChild(item);
@@ -636,8 +788,8 @@ function doSearch() {
 }
 
 function addPlace(name, cat, type, lat, lng) {
-  const emojis = { restaurant:'🍜', cafe:'☕', shopping:'🛍' };
-  const newPlace = { name, cat, emoji: emojis[type]||'📍', lat, lng };
+  const emoji = (TYPE_META[type] || {}).emoji || '📍';
+  const newPlace = { name, cat, emoji, lat, lng };
   if (!customPlaces[activeDay]) customPlaces[activeDay] = [];
   customPlaces[activeDay].push(newPlace);
 
