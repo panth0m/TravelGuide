@@ -93,7 +93,8 @@ body { font-family: 'Noto Sans KR', sans-serif; color: var(--text1); background:
 .seg-badge { font-size: 10px; padding: 2px 7px; border-radius: 10px; font-weight: 500; }
 .seg-badge.transit { background: var(--transit-light); color: var(--transit); }
 .seg-badge.walk { background: var(--walk-light); color: var(--walk); }
-.seg-text { font-size: 11px; color: var(--text2); }
+.seg-text { display:flex; flex-direction:column; gap:2px; font-size: 11px; color: var(--text2); line-height:1.35; }
+.seg-subtext { font-size:10px; color: var(--text3); }
 
 /* ADD PLACE */
 .add-panel { border-top: 0.5px solid var(--border); flex-shrink: 0; padding: 10px 16px; }
@@ -413,6 +414,264 @@ const TYPE_META = {
   hotel:      { dot:'#7B5EA7', emoji:'🏨' },
   sightseeing:{ dot:'#1D9E75', emoji:'🏛' },
 };
+
+
+function normalizeTransitText(value) {
+  return String(value || '').toLowerCase().replace(/\s+/g, '');
+}
+
+const TOKYO_STATIONS = [
+  {
+    name: '도쿄역',
+    lat: 35.6812, lng: 139.7671,
+    exits: [
+      { name: '마루노우치 북쪽 출구', lat: 35.6824, lng: 139.7649 },
+      { name: '마루노우치 남쪽 출구', lat: 35.6799, lng: 139.7648 },
+      { name: '야에스 중앙 출구', lat: 35.6815, lng: 139.7689 },
+    ],
+  },
+  {
+    name: '시부야역',
+    lat: 35.6580, lng: 139.7016,
+    exits: [
+      { name: '하치코 출구', lat: 35.6591, lng: 139.7006 },
+      { name: 'A8 출구', lat: 35.6584, lng: 139.7023 },
+      { name: 'B6 출구', lat: 35.6605, lng: 139.7025 },
+      { name: '미야마스자카 B1 출구', lat: 35.6596, lng: 139.7037 },
+    ],
+  },
+  {
+    name: '신주쿠역',
+    lat: 35.6896, lng: 139.7006,
+    exits: [
+      { name: '동쪽 출구', lat: 35.6906, lng: 139.7006 },
+      { name: '서쪽 출구', lat: 35.6896, lng: 139.6976 },
+      { name: '남쪽 출구', lat: 35.6885, lng: 139.7006 },
+      { name: '신남쪽 출구', lat: 35.6880, lng: 139.7015 },
+    ],
+  },
+  {
+    name: '긴자역',
+    lat: 35.6717, lng: 139.7651,
+    exits: [
+      { name: 'A2 출구', lat: 35.6718, lng: 139.7639 },
+      { name: 'A13 출구', lat: 35.6715, lng: 139.7653 },
+      { name: 'C8 출구', lat: 35.6699, lng: 139.7617 },
+    ],
+  },
+  {
+    name: '아사쿠사역',
+    lat: 35.7117, lng: 139.7966,
+    exits: [
+      { name: 'A1 출구', lat: 35.7119, lng: 139.7975 },
+      { name: 'A4 출구', lat: 35.7108, lng: 139.7984 },
+      { name: '1번 출구', lat: 35.7109, lng: 139.7968 },
+    ],
+  },
+  {
+    name: '우에노역',
+    lat: 35.7141, lng: 139.7774,
+    exits: [
+      { name: '공원 출구', lat: 35.7158, lng: 139.7737 },
+      { name: '중앙 개찰', lat: 35.7138, lng: 139.7773 },
+      { name: '히로코지 출구', lat: 35.7118, lng: 139.7758 },
+    ],
+  },
+  {
+    name: '아키하바라역',
+    lat: 35.6983, lng: 139.7731,
+    exits: [
+      { name: '전기상가 출구', lat: 35.6985, lng: 139.7734 },
+      { name: '중앙 개찰', lat: 35.6982, lng: 139.7748 },
+      { name: '쇼와도리 출구', lat: 35.6975, lng: 139.7760 },
+    ],
+  },
+  {
+    name: '하라주쿠역',
+    lat: 35.6702, lng: 139.7027,
+    exits: [
+      { name: '오모테산도 출구', lat: 35.6703, lng: 139.7027 },
+      { name: '다케시타 출구', lat: 35.6719, lng: 139.7035 },
+    ],
+  },
+  {
+    name: '롯폰기역',
+    lat: 35.6604, lng: 139.7292,
+    exits: [
+      { name: '1C 출구', lat: 35.6605, lng: 139.7299 },
+      { name: '3번 출구', lat: 35.6621, lng: 139.7310 },
+    ],
+  },
+  {
+    name: '오시아게역',
+    lat: 35.7101, lng: 139.8107,
+    exits: [
+      { name: 'B3 출구', lat: 35.7102, lng: 139.8124 },
+      { name: 'A2 출구', lat: 35.7093, lng: 139.8110 },
+    ],
+  },
+  {
+    name: '신바시역',
+    lat: 35.6657, lng: 139.7585,
+    exits: [
+      { name: '긴자 출구', lat: 35.6672, lng: 139.7585 },
+      { name: '유리카모메 연결 출구', lat: 35.6656, lng: 139.7594 },
+    ],
+  },
+  {
+    name: '이케부쿠로역',
+    lat: 35.7295, lng: 139.7109,
+    exits: [
+      { name: '동쪽 출구', lat: 35.7297, lng: 139.7113 },
+      { name: '서쪽 출구', lat: 35.7294, lng: 139.7086 },
+    ],
+  },
+  {
+    name: '도쿄테레포트역',
+    lat: 35.6250, lng: 139.7780,
+    exits: [
+      { name: 'A 출구', lat: 35.6256, lng: 139.7778 },
+      { name: 'B 출구', lat: 35.6245, lng: 139.7785 },
+    ],
+  },
+  {
+    name: '다이바역',
+    lat: 35.6267, lng: 139.7753,
+    exits: [
+      { name: '북쪽 출구', lat: 35.6271, lng: 139.7750 },
+      { name: '남쪽 출구', lat: 35.6260, lng: 139.7759 },
+    ],
+  },
+  {
+    name: '신토요스역',
+    lat: 35.6480, lng: 139.7909,
+    exits: [
+      { name: '북쪽 출구', lat: 35.6484, lng: 139.7910 },
+      { name: '남쪽 출구', lat: 35.6474, lng: 139.7906 },
+    ],
+  },
+  {
+    name: '시나가와역',
+    lat: 35.6284, lng: 139.7388,
+    exits: [
+      { name: '다카나와 출구', lat: 35.6303, lng: 139.7392 },
+      { name: '고난 출구', lat: 35.6283, lng: 139.7405 },
+    ],
+  },
+  {
+    name: '나리타공항역',
+    lat: 35.7647, lng: 140.3864,
+    exits: [
+      { name: 'JR/게이세이 연결 통로', lat: 35.7647, lng: 140.3864 },
+    ],
+  },
+  {
+    name: '하네다공항 제3터미널역',
+    lat: 35.5494, lng: 139.7798,
+    exits: [
+      { name: '철도 연결 통로', lat: 35.5494, lng: 139.7798 },
+    ],
+  },
+];
+
+const TOKYO_PLACE_HINTS = [
+  { keywords: ['도쿄역'], station: '도쿄역', exit: '마루노우치 중앙권', note: '도심 접근이 편한 기준 출구' },
+  { keywords: ['신주쿠역'], station: '신주쿠역', exit: '남쪽 출구', note: '광역 이동이 편한 기준 출구' },
+  { keywords: ['시부야역'], station: '시부야역', exit: '하치코 출구', note: '시부야 중심 접근이 편한 기준 출구' },
+  { keywords: ['우에노역'], station: '우에노역', exit: '중앙 개찰', note: '우에노 공원·시장 접근 기준' },
+  { keywords: ['아사쿠사', '카미나리몬'], station: '아사쿠사역', exit: 'A1 출구', note: '센소지·카미나리몬 쪽 접근이 빠른 편' },
+  { keywords: ['우에노 공원', '국립 도쿄 박물관'], station: '우에노역', exit: '공원 출구', note: '공원·박물관 방면' },
+  { keywords: ['아키하바라', '빅카메라'], station: '아키하바라역', exit: '전기상가 출구', note: '전자상가 방면' },
+  { keywords: ['긴자', '유니클로'], station: '긴자역', exit: 'A13 출구', note: '긴자 메인 스트리트 방면' },
+  { keywords: ['시부야', '돈키호테', '도큐핸즈'], station: '시부야역', exit: '하치코 출구', note: '스크램블·센터가이 방면' },
+  { keywords: ['하라주쿠', '라포레'], station: '하라주쿠역', exit: '다케시타 출구', note: '다케시타·라포레 방면' },
+  { keywords: ['메이지 신궁'], station: '하라주쿠역', exit: '오모테산도 출구', note: '메이지 신궁 입구 방향' },
+  { keywords: ['오모테산도', '아오야마', '블루보틀', '카페 키츠네'], station: '하라주쿠역', exit: '오모테산도 출구', note: '오모테산도·아오야마 방면' },
+  { keywords: ['롯폰기', '모리 미술관'], station: '롯폰기역', exit: '1C 출구', note: '롯폰기힐즈 접근 기준' },
+  { keywords: ['도쿄 타워', '시바 공원'], station: '롯폰기역', exit: '1C 출구', note: '택시/버스 연계가 편한 기준 출구' },
+  { keywords: ['도쿄 스카이트리', '오시아게'], station: '오시아게역', exit: 'B3 출구', note: '스카이트리타운 직결' },
+  { keywords: ['신바시역'], station: '신바시역', exit: '유리카모메 연결 출구', note: '오다이바 이동 기준' },
+  { keywords: ['오다이바 해변', '아쿠아시티', '도쿄 조이폴리스'], station: '다이바역', exit: '북쪽 출구', note: '오다이바 해변·복합몰 접근 기준' },
+  { keywords: ['다이버시티'], station: '도쿄테레포트역', exit: 'B 출구', note: '다이버시티 방면' },
+  { keywords: ['팀랩 플래닛'], station: '신토요스역', exit: '북쪽 출구', note: '도보 접근이 비교적 단순' },
+  { keywords: ['신주쿠 교엔'], station: '신주쿠역', exit: '신남쪽 출구', note: '신주쿠교엔 외곽 접근 기준' },
+  { keywords: ['가부키초'], station: '신주쿠역', exit: '동쪽 출구', note: '가부키초 방면' },
+  { keywords: ['이케부쿠로'], station: '이케부쿠로역', exit: '동쪽 출구', note: '선샤인시티 접근 기준' },
+  { keywords: ['선샤인시티'], station: '이케부쿠로역', exit: '동쪽 출구', note: '선샤인시티 방면' },
+  { keywords: ['시나가와역'], station: '시나가와역', exit: '고난 출구', note: '공항·신칸센 연계 기준' },
+  { keywords: ['나리타', 'narita'], station: '나리타공항역', exit: 'JR/게이세이 연결 통로', note: '공항철도 탑승 기준' },
+  { keywords: ['하네다', 'haneda'], station: '하네다공항 제3터미널역', exit: '철도 연결 통로', note: '게이큐·모노레일 연계 기준' },
+];
+
+function getTokyoStationByName(name) {
+  return TOKYO_STATIONS.find(st => st.name === name) || null;
+}
+
+function getNearestTokyoStation(place) {
+  if (!place) return null;
+  let best = null;
+  let bestKm = Infinity;
+  TOKYO_STATIONS.forEach(st => {
+    const km = haversineKm(place, st);
+    if (km < bestKm) {
+      bestKm = km;
+      best = st;
+    }
+  });
+  return bestKm <= 12 ? best : null;
+}
+
+function getNearestExitForPlace(stationInfo, place) {
+  if (!stationInfo?.exits?.length) return '';
+  if (!place) return stationInfo.exits[0].name;
+  let best = stationInfo.exits[0];
+  let bestKm = Infinity;
+  stationInfo.exits.forEach(exit => {
+    const km = haversineKm(place, exit);
+    if (km < bestKm) {
+      bestKm = km;
+      best = exit;
+    }
+  });
+  return best?.name || stationInfo.exits[0].name;
+}
+
+function getTokyoPlaceHint(place) {
+  if (!place) return null;
+  const hay = normalizeTransitText(`${place.name} ${place.cat || ''}`);
+  return TOKYO_PLACE_HINTS.find(h => (h.keywords || []).some(keyword => hay.includes(normalizeTransitText(keyword)))) || null;
+}
+
+function getTokyoTransitAccess(place) {
+  if (selectedCountry !== '🇯🇵 일본' || selectedCity !== '도쿄' || !place) return null;
+  const hint = getTokyoPlaceHint(place);
+  const stationInfo = hint ? getTokyoStationByName(hint.station) : getNearestTokyoStation(place);
+  if (!stationInfo) return null;
+  const exitName = hint?.exit || getNearestExitForPlace(stationInfo, place);
+  return {
+    stationName: stationInfo.name,
+    exitName,
+    label: exitName ? `${stationInfo.name} ${exitName}` : stationInfo.name,
+    note: hint?.note || '',
+  };
+}
+
+function formatSegmentCost(cost, sampleCost = '') {
+  if (!cost) return '';
+  const money = getMoneyConfig(sampleCost || '¥1,000');
+  const value = money.multiplier ? Math.round(cost / money.multiplier) : cost;
+  return formatMoney(value, money);
+}
+
+function getTransitSegmentDetail(fromPlace, toPlace, seg) {
+  if (!seg || seg.mode !== 'transit') return null;
+  if (!(selectedCountry === '🇯🇵 일본' && selectedCity === '도쿄')) return null;
+  const origin = getTokyoTransitAccess(fromPlace);
+  const destination = getTokyoTransitAccess(toPlace);
+  if (!origin && !destination) return null;
+  const note = destination?.note || origin?.note || '';
+  return { origin, destination, note };
+}
 
 // ── 국가/도시/공항/출발지/일정 DB ──
 const DESTINATIONS = {
@@ -1509,7 +1768,7 @@ function getDayData(dayIdx, options = {}) {
   }
 
   const metrics = buildDynamicMetrics(places, plan.cost);
-  return { ...plan, places, segs: metrics.segs, time: metrics.time, cost: metrics.cost };
+  return { ...plan, sampleCost: plan.cost, places, segs: metrics.segs, time: metrics.time, cost: metrics.cost };
 }
 
 function getRemovedPlaces(dayIdx) {
@@ -1617,10 +1876,17 @@ function renderRoute(data) {
 
     if (i < data.places.length - 1) {
       const seg = data.segs ? (data.segs[Math.min(i, data.segs.length-1)]) : { mode:'walk', mins:10, cost:0 };
+      const segDetail = getTransitSegmentDetail(p, data.places[i+1], seg);
+      const segCostLabel = seg.cost > 0 ? ` · ${formatSegmentCost(seg.cost, data.sampleCost || data.cost)}` : '';
       const segRow = document.createElement('div');
       segRow.className = 'segment-row';
       segRow.innerHTML = `<span class="seg-badge ${seg.mode}">${seg.mode === 'transit' ? '전철' : '도보'}</span>
-        <span class="seg-text">${seg.mins}분 ${seg.cost > 0 ? '· ¥'+seg.cost : ''}</span>`;
+        <span class="seg-text">
+          <span>${seg.mins}분${segCostLabel}</span>
+          ${segDetail?.origin ? `<span class="seg-subtext">승차 추천: ${segDetail.origin.label}</span>` : ''}
+          ${segDetail?.destination ? `<span class="seg-subtext">하차 추천: ${segDetail.destination.label}</span>` : ''}
+          ${segDetail?.note ? `<span class="seg-subtext">${segDetail.note}</span>` : ''}
+        </span>`;
       list.appendChild(segRow);
     }
   });
