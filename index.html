@@ -1149,49 +1149,136 @@ async function fetchJsonWithTimeout(url, options = {}, timeout = 7000) {
   }
 }
 
-async function geocodeHotelLocation(name, area, cityName, countryName, countryCode, cityCenter) {
-  const exactQueries = [
-    [name, area, cityName, countryName].filter(Boolean).join(' '),
-    [name, cityName, countryName].filter(Boolean).join(' '),
-    ['hotel', name, cityName, countryName].filter(Boolean).join(' '),
-    [name, area, cityName].filter(Boolean).join(' '),
-  ].filter(Boolean);
+function normalizeHotelText(value = '') {
+  return String(value || '')
+    .normalize('NFKC')
+    .replace(/[|｜/,:;()\[\]{}]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
-  const hotelTypes = ['hotel','hostel','motel','guest_house','guest house','resort'];
+function expandHotelNameVariants(name, area, cityName) {
+  const base = normalizeHotelText(name);
+  const variants = new Set();
+  const add = (v) => { v = normalizeHotelText(v); if (v) variants.add(v); };
+
+  add(base);
+  add(base.replace(/grand\s*monday/ig, 'GRAND MONday'));
+  add(base.replace(/grand\s*monday/ig, 'MONday'));
+  add(base.replace(/hotel\s*/ig, ''));
+  add(base.replace(/apt/ig, 'apartment'));
+
+  const aliasMap = {
+    '上野御徒町': 'Ueno Okachimachi',
+    '上野': 'Ueno',
+    '御徒町': 'Okachimachi',
+    '浅草': 'Asakusa',
+    '新宿': 'Shinjuku',
+    '渋谷': 'Shibuya',
+    '銀座': 'Ginza',
+    '池袋': 'Ikebukuro',
+    '秋葉原': 'Akihabara',
+    '東京駅': 'Tokyo Station',
+    '東京': 'Tokyo',
+    '大阪': 'Osaka',
+    '京都': 'Kyoto',
+    '札幌': 'Sapporo',
+    '福岡': 'Fukuoka',
+    '名古屋': 'Nagoya',
+    '那覇': 'Naha',
+    '博多': 'Hakata'
+  };
+
+  let extractedArea = normalizeHotelText(area);
+  for (const [jp, en] of Object.entries(aliasMap)) {
+    if (base.includes(jp)) {
+      add(base.replaceAll(jp, en));
+      add(base.replaceAll(jp, ' ' + en + ' '));
+      add(base.replaceAll(jp, '').trim() + ' ' + en);
+      if (!extractedArea) extractedArea = en;
+    }
+  }
+
+  if (extractedArea) {
+    add(base + ' ' + extractedArea);
+    add(base.replace(/hotel\s*/ig, '').trim() + ' ' + extractedArea);
+  }
+  if (cityName) add(base + ' ' + cityName);
+
+  return { variants: [...variants], extractedArea };
+}
+
+async function geocodeHotelLocation(name, area, cityName, countryName, countryCode, cityCenter) {
+  const { variants, extractedArea } = expandHotelNameVariants(name, area, cityName);
+  const finalArea = normalizeHotelText(area || extractedArea || '');
+  const exactQueries = [];
+  const seen = new Set();
+  const pushQuery = (parts) => {
+    const q = normalizeHotelText(parts.filter(Boolean).join(' '));
+    if (q && !seen.has(q)) {
+      seen.add(q);
+      exactQueries.push(q);
+    }
+  };
+
+  variants.forEach(v => {
+    pushQuery([v, finalArea, cityName, countryName]);
+    pushQuery([v, cityName, countryName]);
+    pushQuery(['hotel', v, cityName, countryName]);
+    pushQuery([v, finalArea, cityName]);
+  });
+
+  const hotelTypes = ['hotel','hostel','motel','guest_house','guest house','resort','apartment','apartments','serviced_apartment'];
   const withinReasonableRange = (lat, lng) => {
     if (!cityCenter) return true;
     return haversineKm({ lat, lng }, { lat: cityCenter[0], lng: cityCenter[1] }) <= 80;
+  };
+  const scoreFeature = (item, label = '') => {
+    const type = String(item?.type || item?.properties?.osm_value || item?.properties?.type || '').toLowerCase();
+    const text = normalizeHotelText(`${label} ${item?.display_name || ''} ${item?.properties?.name || ''}`).toLowerCase();
+    const wanted = normalizeHotelText(name).toLowerCase();
+    let score = 0;
+    if (hotelTypes.includes(type)) score += 5;
+    if (wanted && text.includes(wanted)) score += 4;
+    for (const token of wanted.split(' ')) {
+      if (token.length >= 2 && text.includes(token)) score += 1;
+    }
+    if (finalArea && text.includes(finalArea.toLowerCase())) score += 2;
+    return score;
   };
 
   for (const rawQuery of exactQueries) {
     const query = encodeURIComponent(rawQuery);
     try {
-      const nominatimUrl = `https://nominatim.openstreetmap.org/search?q=${query}&format=jsonv2&addressdetails=1&limit=6${countryCode ? `&countrycodes=${countryCode}` : ''}`;
+      const nominatimUrl = `https://nominatim.openstreetmap.org/search?q=${query}&format=jsonv2&addressdetails=1&limit=8${countryCode ? `&countrycodes=${countryCode}` : ''}`;
       const data = await fetchJsonWithTimeout(nominatimUrl, {
-        headers: { 'Accept-Language': 'ja,ko,en' }
+        headers: {
+          'Accept-Language': 'ja,ko,en',
+          'User-Agent': 'Mozilla/5.0 trip-planner'
+        }
       }, 7000);
-      const best = (data || []).find(d => hotelTypes.includes(String(d.type || '').toLowerCase()) && withinReasonableRange(parseFloat(d.lat), parseFloat(d.lon)))
-        || (data || []).find(d => withinReasonableRange(parseFloat(d.lat), parseFloat(d.lon)));
-      if (best) {
+      const filtered = (data || []).filter(d => withinReasonableRange(parseFloat(d.lat), parseFloat(d.lon)));
+      const best = filtered.sort((a, b) => scoreFeature(b, rawQuery) - scoreFeature(a, rawQuery))[0];
+      if (best && scoreFeature(best, rawQuery) >= 4) {
         return {
           lat: parseFloat(best.lat),
           lng: parseFloat(best.lon),
           source: 'nominatim',
           label: best.display_name || rawQuery,
-          exact: hotelTypes.includes(String(best.type || '').toLowerCase()),
+          exact: true,
         };
       }
     } catch (e) {}
 
     try {
-      const photonUrl = `https://photon.komoot.io/api/?q=${query}&limit=6&lang=en`;
+      const photonUrl = `https://photon.komoot.io/api/?q=${query}&limit=8&lang=en`;
       const photon = await fetchJsonWithTimeout(photonUrl, {}, 7000);
-      const features = photon?.features || [];
-      const bestFeature = features.find(f => {
+      const features = (photon?.features || []).filter(f => {
         const coords = f?.geometry?.coordinates || [];
         return coords.length >= 2 && withinReasonableRange(coords[1], coords[0]);
       });
-      if (bestFeature) {
+      const bestFeature = features.sort((a, b) => scoreFeature(b, rawQuery) - scoreFeature(a, rawQuery))[0];
+      if (bestFeature && scoreFeature(bestFeature, rawQuery) >= 4) {
         const coords = bestFeature.geometry.coordinates;
         return {
           lat: parseFloat(coords[1]),
@@ -1204,11 +1291,14 @@ async function geocodeHotelLocation(name, area, cityName, countryName, countryCo
     } catch (e) {}
   }
 
-  if (area) {
-    const areaQuery = encodeURIComponent([area, cityName, countryName].filter(Boolean).join(' '));
+  if (finalArea) {
+    const areaQuery = encodeURIComponent([finalArea, cityName, countryName].filter(Boolean).join(' '));
     try {
       const areaData = await fetchJsonWithTimeout(`https://nominatim.openstreetmap.org/search?q=${areaQuery}&format=jsonv2&addressdetails=1&limit=3${countryCode ? `&countrycodes=${countryCode}` : ''}`, {
-        headers: { 'Accept-Language': 'ja,ko,en' }
+        headers: {
+          'Accept-Language': 'ja,ko,en',
+          'User-Agent': 'Mozilla/5.0 trip-planner'
+        }
       }, 7000);
       const areaBest = (areaData || []).find(d => withinReasonableRange(parseFloat(d.lat), parseFloat(d.lon)));
       if (areaBest) {
@@ -1216,7 +1306,7 @@ async function geocodeHotelLocation(name, area, cityName, countryName, countryCo
           lat: parseFloat(areaBest.lat),
           lng: parseFloat(areaBest.lon),
           source: 'area-fallback',
-          label: areaBest.display_name || area,
+          label: areaBest.display_name || finalArea,
           exact: false,
         };
       }
@@ -1257,7 +1347,7 @@ async function addCustomHotel() {
       return;
     }
 
-    showHotelSearchStatus(`숙소 위치를 찾지 못했습니다. 호텔명과 지역명을 함께 입력해 주세요. 이제는 찾지 못해도 ${selectedCity} 기본 지점으로 강제 이동하지 않습니다.`, 'error');
+    showHotelSearchStatus(`숙소 위치를 찾지 못했습니다. 호텔명만 넣었어도 이름 안의 지역(예: 上野御徒町, Asakusa)을 최대한 읽도록 바꿨지만, 아직 못 찾으면 지역명이나 주소를 함께 넣어 주세요.`, 'error');
   } catch(e) {
     showHotelSearchStatus('숙소 위치 검색 중 오류가 발생했습니다. 잠시 후 다시 시도하거나 지역명을 함께 입력해 주세요.', 'error');
   } finally {
