@@ -273,6 +273,15 @@ body { font-family: 'Noto Sans KR', sans-serif; color: var(--text1); background:
       </div>
 
       <div class="section-gap">
+        <div class="section-title">도착/출발 공항 (선택)</div>
+        <div class="chip-group">
+          <button class="chip selected" id="airportChip1" onclick="selectAirport(this,'나리타 공항',35.7647,140.3864)">나리타</button>
+          <button class="chip" id="airportChip2" onclick="selectAirport(this,'하네다 공항',35.5494,139.7798)">하네다</button>
+          <button class="chip" id="airportChip0" onclick="selectAirport(this,null,null,null)">미정</button>
+        </div>
+      </div>
+
+      <div class="section-gap">
         <div class="section-title">숙소 (선택)</div>
         <div style="display:flex;gap:6px;">
           <input id="hotelInput" class="search-input" type="text" placeholder="숙소 이름 검색 (예: APA, 하얏트)" style="flex:1;font-size:13px;padding:8px 10px;" onkeydown="if(event.key==='Enter'){event.preventDefault();searchHotel();}">
@@ -290,9 +299,12 @@ body { font-family: 'Noto Sans KR', sans-serif; color: var(--text1); background:
   <div class="screen planner-screen" id="screen2">
     <!-- LEFT PANEL -->
     <div class="left-panel">
-      <div class="panel-header">
-        <h2 id="plannerTitle">도쿄 핵심 동선</h2>
-        <p id="plannerSub">1일 · 맛집+쇼핑</p>
+      <div class="panel-header" style="display:flex;align-items:center;gap:10px;">
+        <button type="button" onclick="goBack()" style="flex-shrink:0;width:28px;height:28px;border-radius:50%;border:0.5px solid var(--color-border-secondary);background:var(--color-background-primary);cursor:pointer;font-size:14px;color:var(--color-text-secondary);display:flex;align-items:center;justify-content:center;">←</button>
+        <div style="flex:1;min-width:0;">
+          <h2 id="plannerTitle">도쿄 핵심 동선</h2>
+          <p id="plannerSub">1일 · 맛집+쇼핑</p>
+        </div>
       </div>
       <div class="day-tabs" id="dayTabs"></div>
       <div class="summary-strip">
@@ -529,7 +541,8 @@ let activeDay = 0;
 let activeIdx = null;
 let customPlaces = {};
 let excludedPlaces = {};
-let selectedHotel = null; // { name, cat, emoji, lat, lng }
+let selectedHotel = null;
+let selectedAirport = { name:'나리타 공항', lat:35.7647, lng:140.3864 }; // 기본값 나리타
 
 // ── Leaflet 지도 초기화 ──
 let map = null;
@@ -633,17 +646,31 @@ async function addCustomHotel() {
   if (btn) { btn.textContent = '검색 중...'; btn.disabled = true; }
 
   // Nominatim으로 실제 좌표 검색 (숙소명 + 도쿄)
-  const query = encodeURIComponent(`${name} ${area || '도쿄'} Japan`);
+  // 여러 쿼리로 순차 시도 (한글명, 영문+지역, 지역만)
+  const queries = [
+    `${name} ${area} Japan`,
+    `${name} Tokyo Japan`,
+    `hotel ${name} Tokyo`,
+  ].filter(Boolean).map(q => encodeURIComponent(q));
+
   try {
-    const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${query}&format=json&limit=1&accept-language=ko`, {
-      headers: { 'Accept-Language': 'ko' }
-    });
-    const data = await res.json();
-    if (data && data.length > 0) {
-      const lat = parseFloat(data[0].lat);
-      const lng = parseFloat(data[0].lon);
-      selectHotel(name, area ? `숙소 · ${area}` : '숙소', lat, lng);
-    } else {
+    let found = false;
+    for (const query of queries) {
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${query}&format=json&limit=3&countrycodes=jp`, {
+        headers: { 'Accept-Language': 'ja,ko' }
+      });
+      const data = await res.json();
+      // 숙박시설 우선, 없으면 첫번째 결과
+      const best = data.find(d => d.type && ['hotel','hostel','motel','guest_house'].includes(d.type)) || data[0];
+      if (best) {
+        const lat = parseFloat(best.lat);
+        const lng = parseFloat(best.lon);
+        selectHotel(name, area ? `숙소 · ${area}` : '숙소', lat, lng);
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
       // Nominatim 실패 시 지역명 기반 fallback
       const AREA_COORDS = {
         '신주쿠': [35.6896, 139.7006], '아사쿠사': [35.7147, 139.7966],
@@ -663,6 +690,21 @@ async function addCustomHotel() {
   }
 }
 
+
+function goBack() {
+  document.getElementById('screen2').classList.remove('active');
+  document.getElementById('screen1').classList.add('active');
+  document.getElementById('dot2').classList.remove('active');
+  document.getElementById('dot3').classList.remove('active');
+  document.getElementById('dot1').classList.add('active');
+  if (map) { map.remove(); map = null; markersLayer = []; routeLine = null; }
+}
+
+function selectAirport(el, name, lat, lng) {
+  document.querySelectorAll('[id^="airportChip"]').forEach(c => c.classList.remove('selected'));
+  el.classList.add('selected');
+  selectedAirport = name ? { name, lat, lng } : null;
+}
 
 function changeDays(d) {
   days = Math.max(1, Math.min(7, days + d));
@@ -703,17 +745,35 @@ function renderTabs() {
 function getDayData(dayIdx) {
   const plan = DAY_PLANS[dayIdx] || DAY_PLANS[dayIdx % DAY_PLANS.length];
   const excluded = excludedPlaces[dayIdx] || new Set();
+  const isFirstDay = dayIdx === 0;
+  const isLastDay = dayIdx === days - 1;
 
   let base = plan.places.map(p => ({...p})).filter((p, i) => {
     if (i === 0 || i === plan.places.length - 1) return true;
     return !excluded.has(p.name);
   });
 
-  // 숙소가 선택된 경우 출발지·도착지를 숙소로 교체
-  if (selectedHotel) {
-    const hotelPlace = { ...selectedHotel, cat: selectedHotel.cat || '숙소' };
-    base[0] = { ...hotelPlace };                      // 출발지
-    base[base.length - 1] = { ...hotelPlace };        // 도착지
+  const airport = selectedAirport
+    ? { name: selectedAirport.name, cat: '공항', emoji: '✈️', lat: selectedAirport.lat, lng: selectedAirport.lng }
+    : null;
+  const hotel = selectedHotel
+    ? { ...selectedHotel, cat: selectedHotel.cat || '숙소' }
+    : null;
+
+  // 첫날: 공항 → (숙소 경유) → 관광지들
+  if (isFirstDay && airport) {
+    base[0] = airport;
+    if (hotel) base[base.length - 1] = hotel; // 첫날 마지막은 숙소
+  }
+  // 마지막날: 숙소 → 관광지들 → 공항
+  else if (isLastDay && airport) {
+    if (hotel) base[0] = hotel; // 마지막날 출발은 숙소
+    base[base.length - 1] = airport;
+  }
+  // 중간날: 숙소 → 관광지 → 숙소
+  else if (hotel) {
+    base[0] = { ...hotel };
+    base[base.length - 1] = { ...hotel };
   }
 
   const extras = (customPlaces[dayIdx] || []).filter(p => !excluded.has(p.name));
