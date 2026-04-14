@@ -141,6 +141,10 @@ body { font-family: 'Noto Sans KR', sans-serif; color: var(--text1); background:
 @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 .route-item, .result-item { animation: fadeIn 0.2s ease; }
 .route-item.drag-over { border-top: 2px solid var(--accent); background: var(--accent-light); }
+.drag-handle { touch-action: none; user-select: none; -webkit-user-select: none; }
+.mobile-move-controls { display: none; align-items: center; gap: 4px; flex-shrink: 0; }
+.mobile-move-btn { width: 24px; height: 24px; border-radius: 999px; border: 1px solid var(--border2); background: var(--bg); color: var(--text2); display: inline-flex; align-items: center; justify-content: center; font-size: 12px; cursor: pointer; font-family: inherit; }
+.mobile-move-btn:disabled { opacity: 0.35; cursor: default; }
 
 /* ===== MOBILE ===== */
 @media (max-width: 640px) {
@@ -197,6 +201,8 @@ body { font-family: 'Noto Sans KR', sans-serif; color: var(--text1); background:
   /* 탭 스크롤 */
   .day-tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; }
   .day-tab { padding: 9px 16px; font-size: 13px; }
+  .mobile-move-controls { display: inline-flex; }
+  .drag-handle { display: none !important; }
 }
 </style>
 </head>
@@ -1833,6 +1839,26 @@ function renderRemovedPlaces() {
 // ── 드래그 상태 ──
 let dragSrc = null;
 
+function reorderDayPlaces(fromIdx, toIdx) {
+  const cur = getDayData(activeDay).places;
+  if (!Array.isArray(cur) || cur.length <= 1) return;
+  if (fromIdx === toIdx) return;
+  if (fromIdx < 0 || fromIdx >= cur.length) return;
+  if (toIdx < 0 || toIdx >= cur.length) return;
+
+  const arr = [...cur];
+  const [moved] = arr.splice(fromIdx, 1);
+  arr.splice(toIdx, 0, moved);
+  orderOverrides[activeDay] = arr;
+  activeIdx = toIdx;
+  dragSrc = null;
+  renderDayPlan();
+}
+
+function movePlaceBy(idx, delta) {
+  reorderDayPlaces(idx, idx + delta);
+}
+
 function renderRoute(data) {
   const list = document.getElementById('routeList');
   list.innerHTML = '';
@@ -1852,13 +1878,7 @@ function renderRoute(data) {
       item.addEventListener('drop', e => {
         e.preventDefault();
         if (dragSrc === null || dragSrc === i) return;
-        const cur = getDayData(activeDay).places;
-        const arr = [...cur];
-        const [moved] = arr.splice(dragSrc, 1);
-        arr.splice(i, 0, moved);
-        orderOverrides[activeDay] = arr;
-        dragSrc = null;
-        renderDayPlan();
+        reorderDayPlaces(dragSrc, i);
       });
     }
 
@@ -1867,6 +1887,10 @@ function renderRoute(data) {
       <div class="ri-num">${i+1}</div>
       <div class="ri-info"><div class="ri-name">${p.name}</div><div class="ri-cat">${p.cat}</div></div>
       <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+        <div class="mobile-move-controls">
+          <button class="mobile-move-btn" ${i === 0 ? 'disabled' : ''} onclick="event.stopPropagation();movePlaceBy(${i}, -1)" title="위로 이동">↑</button>
+          <button class="mobile-move-btn" ${i === data.places.length - 1 ? 'disabled' : ''} onclick="event.stopPropagation();movePlaceBy(${i}, 1)" title="아래로 이동">↓</button>
+        </div>
         <div class="ri-time">${p.emoji}</div>
         ${canRemove ? `<button onclick="event.stopPropagation();removePlace('${escapeJsAttr(p.instanceKey || p.name)}')" style="width:20px;height:20px;border-radius:50%;border:1px solid #ddd;background:none;cursor:pointer;font-size:12px;color:#999;display:flex;align-items:center;justify-content:center;flex-shrink:0;" title="제외">✕</button>` : ''}
       </div>
