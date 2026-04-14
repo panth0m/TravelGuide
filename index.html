@@ -272,13 +272,8 @@ body { font-family: 'Noto Sans KR', sans-serif; color: var(--text1); background:
       </div>
 
       <div class="section-gap">
-        <div class="section-title">출발지</div>
-        <div class="chip-group">
-          <button class="chip selected" onclick="toggleChip(this)">도쿄역</button>
-          <button class="chip" onclick="toggleChip(this)">신주쿠역</button>
-          <button class="chip" onclick="toggleChip(this)">시부야역</button>
-          <button class="chip" onclick="toggleChip(this)">우에노역</button>
-        </div>
+        <div class="section-title">현지 출발 거점</div>
+        <div class="chip-group" id="localHubChips"></div>
       </div>
 
       <div class="section-gap">
@@ -997,7 +992,7 @@ async function addCustomHotel() {
       return;
     }
 
-    showHotelSearchStatus('숙소 위치를 찾지 못했습니다. 호텔명과 지역명을 함께 입력해 주세요. 이제는 찾지 못해도 자동으로 도쿄역으로 넣지 않습니다.', 'error');
+    showHotelSearchStatus(`숙소 위치를 찾지 못했습니다. 호텔명과 지역명을 함께 입력해 주세요. 이제는 찾지 못해도 ${selectedCity} 기본 지점으로 강제 이동하지 않습니다.`, 'error');
   } catch(e) {
     showHotelSearchStatus('숙소 위치 검색 중 오류가 발생했습니다. 잠시 후 다시 시도하거나 지역명을 함께 입력해 주세요.', 'error');
   } finally {
@@ -1049,12 +1044,14 @@ function renderDestinationUI() {
       renderDestinationUI();
       renderCityUI();
       renderAirportUI();
+      renderLocalHubUI();
     };
     cityEl.appendChild(btn);
   });
 
   renderCityUI();
   renderAirportUI();
+  renderLocalHubUI();
 }
 
 function renderOriginAirportUI() {
@@ -1087,6 +1084,25 @@ function renderCityUI() {
       if (selectedHotel && selectedHotel._city !== selectedCity) clearHotel();
       renderCityUI();
       renderAirportUI();
+      renderLocalHubUI();
+    };
+    el.appendChild(btn);
+  });
+}
+
+
+function renderLocalHubUI() {
+  const el = document.getElementById('localHubChips');
+  if (!el) return;
+  const hubs = DESTINATIONS[selectedCountry]?.cities?.[selectedCity]?.hubs || [selectedCity + ' 중심가'];
+  el.innerHTML = '';
+  hubs.forEach((hub, idx) => {
+    const btn = document.createElement('button');
+    btn.className = 'chip' + (idx === 0 ? ' selected' : '');
+    btn.textContent = hub;
+    btn.onclick = () => {
+      [...el.querySelectorAll('.chip')].forEach(c => c.classList.remove('selected'));
+      btn.classList.add('selected');
     };
     el.appendChild(btn);
   });
@@ -1158,8 +1174,120 @@ function renderTabs() {
 }
 
 
+
+function getDefaultSampleCostForSelection() {
+  const byCountry = {
+    '🇯🇵 일본': '¥1,000',
+    '🇫🇷 프랑스': '€12',
+    '🇬🇧 영국': '£10',
+    '🇹🇭 태국': '฿220',
+    '🇻🇳 베트남': '₫120K',
+    '🇦🇺 호주': 'A$14',
+  };
+  return byCountry[selectedCountry] || '¥1,000';
+}
+
+function buildGenericPlansForSelectedCity() {
+  const cityMeta = DESTINATIONS[selectedCountry]?.cities?.[selectedCity];
+  if (!cityMeta) return CITY_PLANS['도쿄'];
+
+  const center = cityMeta.center || [35.6812, 139.7671];
+  const hubs = Array.isArray(cityMeta.hubs) && cityMeta.hubs.length ? cityMeta.hubs : [selectedCity + ' 중심가'];
+  const airport = cityMeta.airports?.[0] || null;
+
+  function placeFromHub(name, idx) {
+    const latOffset = (idx % 2 === 0 ? 0.012 : -0.010) + idx * 0.002;
+    const lngOffset = (idx % 2 === 0 ? 0.010 : -0.012) - idx * 0.0015;
+    const cats = ['중심지', '쇼핑/산책', '맛집', '명소', '카페/휴식'];
+    const emojis = ['📍', '🛍', '🍽', '🏛', '☕'];
+    return {
+      name,
+      cat: cats[idx % cats.length],
+      emoji: emojis[idx % emojis.length],
+      lat: Number((center[0] + latOffset).toFixed(6)),
+      lng: Number((center[1] + lngOffset).toFixed(6)),
+    };
+  }
+
+  const hubPlaces = hubs.slice(0, 4).map(placeFromHub);
+  const firstPlace = hubPlaces[0] || {
+    name: selectedCity + ' 중심가',
+    cat: '중심지',
+    emoji: '📍',
+    lat: center[0],
+    lng: center[1],
+  };
+  const lastPlace = hubPlaces[hubPlaces.length - 1] || firstPlace;
+
+  const airportPlace = airport ? {
+    name: airport.short || airport.name,
+    cat: '공항',
+    emoji: '✈️',
+    lat: airport.lat,
+    lng: airport.lng,
+  } : null;
+
+  const sampleCost = getDefaultSampleCostForSelection();
+
+  const plans = [
+    {
+      theme: `${selectedCity} 핵심 동선`,
+      time: '120분',
+      cost: sampleCost,
+      places: [firstPlace, ...hubPlaces.slice(1), lastPlace],
+      segs: [],
+    },
+    {
+      theme: `${selectedCity} 여유 일정`,
+      time: '95분',
+      cost: sampleCost,
+      places: [
+        firstPlace,
+        ...hubPlaces.slice(1, 3),
+        {
+          name: selectedCity + ' 추천 스팟',
+          cat: '산책/포토',
+          emoji: '🌆',
+          lat: Number((center[0] - 0.008).toFixed(6)),
+          lng: Number((center[1] + 0.013).toFixed(6)),
+        },
+        lastPlace,
+      ],
+      segs: [],
+    }
+  ].map(plan => ({
+    ...plan,
+    places: uniquePlacesByKey(plan.places.filter(Boolean).map((place, idx) => ({
+      ...place,
+      instanceKey: `generic-${selectedCity}-${plan.theme}-${idx}-${place.name}`,
+      sourceType: 'generic',
+    }))),
+  }));
+
+  if (airportPlace) {
+    plans.push({
+      theme: `${selectedCity} 입출국 일정`,
+      time: '140분',
+      cost: sampleCost,
+      places: uniquePlacesByKey([
+        airportPlace,
+        firstPlace,
+        ...hubPlaces.slice(1, 3),
+        lastPlace,
+      ].filter(Boolean).map((place, idx) => ({
+        ...place,
+        instanceKey: `generic-airport-${selectedCity}-${idx}-${place.name}`,
+        sourceType: 'generic',
+      }))),
+      segs: [],
+    });
+  }
+
+  return plans;
+}
+
 function getActivePlans() {
-  return CITY_PLANS[selectedCity] || CITY_PLANS['도쿄'];
+  return CITY_PLANS[selectedCity] || buildGenericPlansForSelectedCity();
 }
 
 function getAirportPlace(role = 'general', dayIdx = activeDay) {
