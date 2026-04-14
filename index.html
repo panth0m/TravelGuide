@@ -628,8 +628,8 @@ function getNearestTokyoStation(place) {
 }
 
 function getNearestExitForPlace(stationInfo, place) {
-  if (!stationInfo?.exits?.length) return '';
-  if (!place) return stationInfo.exits[0].name;
+  if (!stationInfo?.exits?.length) return null;
+  if (!place) return stationInfo.exits[0];
   let best = stationInfo.exits[0];
   let bestKm = Infinity;
   stationInfo.exits.forEach(exit => {
@@ -639,7 +639,31 @@ function getNearestExitForPlace(stationInfo, place) {
       best = exit;
     }
   });
-  return best?.name || stationInfo.exits[0].name;
+  return best || stationInfo.exits[0];
+}
+
+function estimateAccessWalkMinutes(place, stationInfo, exitInfo) {
+  if (!place || !stationInfo) return 0;
+  const target = exitInfo || stationInfo;
+  const km = haversineKm(place, target);
+  const normalizedPlace = normalizeTransitText(place.name || '');
+  const normalizedStation = normalizeTransitText((stationInfo.name || '').replace(/역/g, ''));
+
+  let mins = Math.max(2, Math.round(km * 13));
+
+  if (normalizedStation && normalizedPlace.includes(normalizedStation)) {
+    mins = Math.min(mins, 2);
+  }
+
+  if (isAirportPlace(place)) {
+    mins = Math.max(6, Math.round(km * 12 + 4));
+  }
+
+  if (km < 0.08 && !isAirportPlace(place)) {
+    mins = 2;
+  }
+
+  return mins;
 }
 
 function getTokyoPlaceHint(place) {
@@ -653,12 +677,18 @@ function getTokyoTransitAccess(place) {
   const hint = getTokyoPlaceHint(place);
   const stationInfo = hint ? getTokyoStationByName(hint.station) : getNearestTokyoStation(place);
   if (!stationInfo) return null;
-  const exitName = hint?.exit || getNearestExitForPlace(stationInfo, place);
+  const exitInfo = hint?.exit
+    ? (stationInfo.exits || []).find(exit => exit.name === hint.exit) || getNearestExitForPlace(stationInfo, place)
+    : getNearestExitForPlace(stationInfo, place);
+  const exitName = exitInfo?.name || '';
   return {
     stationName: stationInfo.name,
     exitName,
+    exitInfo,
     label: exitName ? `${stationInfo.name} ${exitName}` : stationInfo.name,
     note: hint?.note || '',
+    accessMins: estimateAccessWalkMinutes(place, stationInfo, exitInfo),
+    accessKm: haversineKm(place, exitInfo || stationInfo),
   };
 }
 
@@ -676,7 +706,16 @@ function getTransitSegmentDetail(fromPlace, toPlace, seg) {
   const destination = getTokyoTransitAccess(toPlace);
   if (!origin && !destination) return null;
   const note = destination?.note || origin?.note || '';
-  return { origin, destination, note };
+  const approachMins = origin?.accessMins || 0;
+  const arrivalWalkMins = destination?.accessMins || 0;
+  return {
+    origin,
+    destination,
+    note,
+    approachMins,
+    arrivalWalkMins,
+    doorToDoorMins: seg.mins + approachMins + arrivalWalkMins,
+  };
 }
 
 // ── 국가/도시/공항/출발지/일정 DB ──
@@ -1997,8 +2036,9 @@ function renderRoute(data) {
       segRow.innerHTML = `<span class="seg-badge ${seg.mode}">${seg.mode === 'transit' ? '전철' : '도보'}</span>
         <span class="seg-text">
           <span>${seg.mins}분${segCostLabel}</span>
-          ${segDetail?.origin ? `<span class="seg-subtext">승차 추천: ${segDetail.origin.label}</span>` : ''}
-          ${segDetail?.destination ? `<span class="seg-subtext">하차 추천: ${segDetail.destination.label}</span>` : ''}
+          ${segDetail?.origin ? `<span class="seg-subtext">① ${p.name} → ${segDetail.origin.label} 도보 약 ${segDetail.approachMins}분</span>` : ''}
+          ${segDetail?.destination ? `<span class="seg-subtext">② ${segDetail.destination.label} → ${data.places[i+1].name} 도보 약 ${segDetail.arrivalWalkMins}분</span>` : ''}
+          ${(segDetail?.origin || segDetail?.destination) ? `<span class="seg-subtext">문앞 기준 예상 약 ${segDetail.doorToDoorMins}분</span>` : ''}
           ${segDetail?.note ? `<span class="seg-subtext">${segDetail.note}</span>` : ''}
         </span>`;
       list.appendChild(segRow);
